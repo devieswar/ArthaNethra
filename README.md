@@ -8,15 +8,15 @@
 [![AWS Bedrock](https://img.shields.io/badge/AWS-Bedrock-orange.svg)](https://aws.amazon.com/bedrock/)
 [![LandingAI ADE](https://img.shields.io/badge/LandingAI-ADE-green.svg)](https://landing.ai/)
 
-## 🚀 Hackathon Focus
+## 🌟 Overview
 
-**Event:** Financial AI Hackathon Championship 2025  
-**Hosts:** LandingAI × AWS × DeepLearning.AI  
-**Core Challenge:** Build an intelligent financial agent that:
-* Integrates **LandingAI's Agentic Document Extraction (ADE)** API ✅ (mandatory)
-* Leverages **AWS Bedrock** for reasoning
-* Demonstrates real-world financial document analysis & insights
-* Runs as a usable prototype with explainability and real-time reasoning
+**ArthaNethra** (from Sanskrit: "Artha" = wealth, "Nethra" = eye/vision) is an AI-powered financial investigation platform that transforms complex financial documents into connected, explainable insights.
+
+Financial analysts spend countless hours reviewing thousands of pages of documents to understand risks, relationships, and compliance gaps. ArthaNethra automates this process using:
+* **LandingAI's Agentic Document Extraction (ADE)** for intelligent document parsing
+* **AWS Bedrock (Claude 3)** for reasoning and explanations
+* **Knowledge graphs** for relationship mapping
+* **Vector search** for semantic discovery
 
 ---
 
@@ -133,7 +133,7 @@ Create an **AI-powered financial investigation agent** that can:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/ArthaNethra.git
+git clone https://github.com/devieswar/ArthaNethra.git
 cd ArthaNethra
 
 # Start infrastructure
@@ -191,17 +191,14 @@ ArthaNethra/
 
 ---
 
-## 🏆 Hackathon Goals
+## 🎯 Key Use Cases
 
-| Goal                                      | Description                                            | Metric                            |
-| ----------------------------------------- | ------------------------------------------------------ | --------------------------------- |
-| **1. Problem Clarity & Domain Relevance** | Solve real-world financial compliance / audit use case | Clear risk detection examples     |
-| **2. Deep ADE Integration**               | Mandatory API use; visible ADE-to-Graph mapping        | Live ADE extraction + JSON proof  |
-| **3. Technical Depth**                    | LLM + Graph + Vector + UI synergy                      | Demonstrated architecture diagram |
-| **4. Accuracy & Reliability**             | Verified results, evidence-backed insights             | Citations + numeric checks        |
-| **5. Usability & Workflow Design**        | Interactive and intuitive                              | Clean UI, fast graph, simple chat |
-| **6. Feasibility**                        | Runnable MVP with path to pilot                        | Local demo + deploy-ready code    |
-| **7. Presentation Quality**               | Polished, visual, confident story                      | <4 min crisp demo & Q&A ready     |
+| Use Case                 | Problem                                 | ArthaNethra Solution                      |
+| ------------------------ | --------------------------------------- | ----------------------------------------- |
+| **Loan Risk Assessment** | Manual review of loan agreements (weeks) | Automated extraction + risk scoring (hours) |
+| **Compliance Audit**     | Missing covenants detected too late      | Real-time compliance gap detection        |
+| **Financial Analysis**   | Fragmented view across documents          | Unified knowledge graph of relationships  |
+| **Invoice Reconciliation** | Time-consuming GL matching              | Automated mismatch detection               |
 
 ---
 
