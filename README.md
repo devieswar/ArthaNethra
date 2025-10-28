@@ -123,11 +123,12 @@ Create an **AI-powered financial investigation agent** that can:
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.11+
-- Node.js 20+
-- Docker & Docker Compose
-- AWS credentials for Bedrock
-- LandingAI API key
+- **Python 3.11+** 
+- **Node.js 20+**
+- **Docker & Docker Compose**
+- **UV** (recommended) or pip — [Install UV](https://docs.astral.sh/uv/)
+- **AWS credentials** for Bedrock
+- **LandingAI API key**
 
 ### Installation
 
@@ -136,25 +137,32 @@ Create an **AI-powered financial investigation agent** that can:
 git clone https://github.com/devieswar/ArthaNethra.git
 cd ArthaNethra
 
-# Start infrastructure
+# Set up environment variables
+cp env.example .env
+# Edit .env with your API keys
+
+# Start all services with Docker
 docker-compose up -d
 
-# Install backend dependencies
-cd backend
-pip install -r requirements.txt
-
-# Install frontend dependencies
-cd ../frontend
-npm install
-
-# Run backend
-cd ../backend
-uvicorn main:app --reload
-
-# Run frontend (new terminal)
-cd frontend
-ng serve
+# Access the application
+# Frontend: http://localhost:4200
+# Backend API: http://localhost:8000/api/v1/docs
+# Neo4j: http://localhost:7474
 ```
+
+**📖 For detailed setup instructions, see [GETTING_STARTED.md](GETTING_STARTED.md)**
+
+### Code Quality
+
+```bash
+# Check code quality
+make lint
+
+# Auto-fix issues
+make format
+```
+
+**📋 For linting details, see [LINT_QUICKSTART.md](LINT_QUICKSTART.md)**
 
 ---
 
@@ -162,30 +170,51 @@ ng serve
 
 ```
 ArthaNethra/
-├── backend/              # FastAPI microservices
-│   ├── services/
-│   │   ├── ingestion.py
-│   │   ├── extraction.py
-│   │   ├── normalization.py
-│   │   ├── indexing.py
-│   │   ├── risk_detection.py
-│   │   └── chatbot.py
-│   ├── models/
-│   ├── utils/
-│   └── main.py
-├── frontend/             # Angular application
+├── backend/              # FastAPI backend
+│   ├── services/         # Business logic services
+│   │   ├── ingestion.py        # Document upload
+│   │   ├── extraction.py       # LandingAI ADE integration
+│   │   ├── normalization.py    # Graph construction
+│   │   ├── indexing.py         # Weaviate/Neo4j indexing
+│   │   ├── risk_detection.py   # Risk analysis
+│   │   └── chatbot.py          # AWS Bedrock chatbot
+│   ├── models/           # Data models
+│   │   ├── document.py
+│   │   ├── entity.py
+│   │   ├── edge.py
+│   │   ├── risk.py
+│   │   └── citation.py
+│   ├── config.py         # Configuration
+│   ├── main.py           # FastAPI application
+│   ├── requirements.txt  # Python dependencies
+│   └── Dockerfile
+├── frontend/             # Angular frontend
 │   ├── src/
 │   │   ├── app/
-│   │   │   ├── components/
-│   │   │   ├── services/
-│   │   │   └── models/
-│   │   └── assets/
-│   └── angular.json
+│   │   │   ├── components/     # UI components
+│   │   │   │   ├── dashboard/
+│   │   │   │   ├── upload/
+│   │   │   │   ├── graph/
+│   │   │   │   ├── chat/
+│   │   │   │   └── risks/
+│   │   │   ├── services/       # API services
+│   │   │   ├── models/         # TypeScript models
+│   │   │   └── app.component.ts
+│   │   ├── environments/
+│   │   └── styles.scss
+│   ├── package.json      # Node dependencies
+│   ├── angular.json
+│   ├── tailwind.config.js
+│   └── Dockerfile
 ├── docs/                 # Documentation
-│   ├── PITCH_DECK.md
-│   ├── ARCHITECTURE.md
-│   └── API.md
-├── docker-compose.yml
+│   ├── ARCHITECTURE.md   # Technical architecture
+│   ├── API.md            # API documentation
+│   └── PROJECT_OVERVIEW.md
+├── docker-compose.yml    # Docker orchestration
+├── env.example           # Environment template
+├── GETTING_STARTED.md    # Setup guide
+├── HACKATHON_CHECKLIST.md
+├── LICENSE
 └── README.md
 ```
 

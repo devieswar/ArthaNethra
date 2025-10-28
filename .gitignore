@@ -26,6 +26,11 @@ venv/
 env/
 ENV/
 .venv
+.venv/
+
+# UV
+uv.lock
+.python-version
 
 # IDEs
 .vscode/
@@ -44,6 +49,7 @@ node_modules/
 dist/
 .tmp/
 *.log
+.angular/
 
 # Docker
 docker-compose.override.yml
@@ -78,3 +84,8 @@ htmlcov/
 local_data/
 temp/
 
+# Ruff cache
+.ruff_cache/
+
+# MyPy cache
+.mypy_cache/
