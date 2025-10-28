@@ -1,0 +1,80 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# Node/Angular
+node_modules/
+dist/
+.tmp/
+*.log
+
+# Docker
+docker-compose.override.yml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project Specific
+uploads/
+outputs/
+cache/
+*.pdf
+docs/sample_documents/
+*.db
+*.sqlite
+
+# API Keys (DO NOT COMMIT!)
+config/secrets.yaml
+.secrets/
+
+# Testing
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Local Development
+local_data/
+temp/
+
