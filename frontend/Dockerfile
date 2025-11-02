@@ -10,7 +10,7 @@ RUN npm install -g @angular/cli@19
 COPY package*.json ./
 
 # Install dependencies
-RUN npm install
+RUN npm install --legacy-peer-deps
 
 # Copy application code
 COPY . .

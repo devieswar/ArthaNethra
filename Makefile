@@ -65,14 +65,14 @@ test-frontend:
 # Docker
 docker-up:
 	@echo "Starting Docker services..."
-	docker-compose up -d
+	docker compose up -d
 
 docker-down:
 	@echo "Stopping Docker services..."
-	docker-compose down
+	docker compose down
 
 docker-logs:
-	docker-compose logs -f
+	docker compose logs -f
 
 # Clean
 clean:
