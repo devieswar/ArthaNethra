@@ -15,26 +15,40 @@ class IndexingService:
     """Handles indexing entities and edges in vector and graph databases"""
     
     def __init__(self):
-        # Weaviate client
-        self.weaviate_client = weaviate.Client(
-            url=settings.WEAVIATE_URL,
-            auth_client_secret=weaviate.AuthApiKey(api_key=settings.WEAVIATE_API_KEY) if settings.WEAVIATE_API_KEY else None
-        )
+        # Defaults to None; attempt connections but don't fail startup
+        self.weaviate_client = None
+        self.neo4j_driver = None
+        
+        # Weaviate client (optional)
+        if getattr(settings, "ENABLE_WEAVIATE", False) and settings.WEAVIATE_URL:
+            try:
+                self.weaviate_client = weaviate.Client(
+                    url=settings.WEAVIATE_URL,
+                    auth_client_secret=weaviate.AuthApiKey(api_key=settings.WEAVIATE_API_KEY) if settings.WEAVIATE_API_KEY else None
+                )
+            except Exception as e:
+                logger.warning(f"Weaviate not available: {e}")
+        else:
+            logger.info("Weaviate indexing disabled by config")
         
         # Neo4j driver (optional)
-        try:
-            self.neo4j_driver = GraphDatabase.driver(
-                settings.NEO4J_URI,
-                auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
-            )
-        except Exception as e:
-            logger.warning(f"Neo4j not available: {e}")
-            self.neo4j_driver = None
+        if getattr(settings, "ENABLE_NEO4J", False):
+            try:
+                self.neo4j_driver = GraphDatabase.driver(
+                    settings.NEO4J_URI,
+                    auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+                )
+            except Exception as e:
+                logger.warning(f"Neo4j not available: {e}")
+        else:
+            logger.info("Neo4j indexing disabled by config")
         
         self._init_weaviate_schema()
     
     def _init_weaviate_schema(self):
         """Initialize Weaviate schema for entities"""
+        if not self.weaviate_client:
+            return
         schema = {
             "classes": [
                 {
@@ -102,7 +116,9 @@ class IndexingService:
         """
         logger.info(f"Indexing {len(entities)} entities")
         
-        weaviate_count = await self._index_to_weaviate(entities)
+        weaviate_count = 0
+        if self.weaviate_client:
+            weaviate_count = await self._index_to_weaviate(entities)
         neo4j_count = 0
         
         if self.neo4j_driver:
@@ -220,6 +236,8 @@ class IndexingService:
         Returns:
             List of matching entities
         """
+        if not self.weaviate_client:
+            return []
         result = (
             self.weaviate_client.query
             .get("FinancialEntity", ["entityId", "name", "entityType", "properties", "citations"])
@@ -227,12 +245,14 @@ class IndexingService:
             .with_limit(limit)
             .do()
         )
-        
         entities = result.get("data", {}).get("Get", {}).get("FinancialEntity", [])
         return entities
     
     def __del__(self):
         """Close connections"""
-        if self.neo4j_driver:
-            self.neo4j_driver.close()
+        try:
+            if getattr(self, "neo4j_driver", None):
+                self.neo4j_driver.close()
+        except Exception:
+            pass
 

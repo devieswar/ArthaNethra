@@ -62,7 +62,18 @@ import { RouterLink } from '@angular/router';
           </p>
         </div>
 
-        <!-- Feature 4 -->
+        <!-- Feature 4: Documents -->
+        <div class="card hover:shadow-md transition-shadow cursor-pointer" routerLink="/documents">
+          <div class="text-4xl mb-4">📄</div>
+          <h3 class="text-lg font-semibold text-gray-900 mb-2">
+            Documents
+          </h3>
+          <p class="text-sm text-gray-600">
+            View uploaded and processed documents with statuses
+          </p>
+        </div>
+
+        <!-- Feature 5 -->
         <div class="card hover:shadow-md transition-shadow cursor-pointer" routerLink="/chat">
           <div class="text-4xl mb-4">💬</div>
           <h3 class="text-lg font-semibold text-gray-900 mb-2">
@@ -73,7 +84,7 @@ import { RouterLink } from '@angular/router';
           </p>
         </div>
 
-        <!-- Feature 5 -->
+        <!-- Feature 6 -->
         <div class="card hover:shadow-md transition-shadow">
           <div class="text-4xl mb-4">📊</div>
           <h3 class="text-lg font-semibold text-gray-900 mb-2">
@@ -84,7 +95,7 @@ import { RouterLink } from '@angular/router';
           </p>
         </div>
 
-        <!-- Feature 6 -->
+        <!-- Feature 7 -->
         <div class="card hover:shadow-md transition-shadow">
           <div class="text-4xl mb-4">📑</div>
           <h3 class="text-lg font-semibold text-gray-900 mb-2">
