@@ -66,6 +66,13 @@ docs/sample_documents/
 config/secrets.yaml
 .secrets/
 
+# Environment files
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+
 # Testing
 .coverage
 .pytest_cache/
