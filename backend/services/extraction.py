@@ -7,6 +7,7 @@ import os
 import zipfile
 import mimetypes
 import httpx
+import asyncio
 from typing import Dict, Any, List, Tuple
 from loguru import logger
 
@@ -112,14 +113,35 @@ class ExtractionService:
         return self._merge_parse_and_extract(parse_json, extract_json)
 
     async def _ade_parse(self, filename: str, content: bytes, mime_type: str) -> Dict[str, Any]:
+        """Parse document with retry logic for rate limiting"""
         url = f"{self.api_url}/ade/parse"
         files = {"document": (filename, io.BytesIO(content), mime_type)}
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.post(url, headers=self.auth_header, files=files)
-            resp.raise_for_status()
-            return resp.json()
+        
+        logger.info(f"Calling ADE Parse API: {url}")
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=300.0) as client:
+                    resp = await client.post(url, headers=self.auth_header, files=files)
+                    logger.info(f"ADE Parse response: status={resp.status_code}")
+                    resp.raise_for_status()
+                    result = resp.json()
+                    logger.info(f"ADE Parse success: returned data with {len(str(result))} chars")
+                    return result
+            except httpx.HTTPStatusError as e:
+                logger.error(f"ADE Parse HTTP error: status={e.response.status_code}, body={e.response.text[:500]}")
+                if e.response.status_code == 429 and attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 5  # Exponential backoff: 5s, 10s, 20s
+                    logger.warning(f"Rate limited (429), retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                raise
+            except httpx.HTTPError as e:
+                logger.error(f"ADE Parse connection error: {str(e)}")
+                raise
 
     async def _ade_extract(self, markdown: str) -> Dict[str, Any]:
+        """Extract with retry logic for rate limiting"""
         url = f"{self.api_url}/ade/extract"
         # Minimal default schema that extracts a free-form summary and any fields it can map.
         schema = {
@@ -132,10 +154,29 @@ class ExtractionService:
             "schema": json.dumps(schema),  # send schema as JSON string per docs
             "markdown": markdown
         }
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.post(url, headers=self.auth_header, data=data)
-            resp.raise_for_status()
-            return resp.json()
+        
+        logger.info(f"Calling ADE Extract API: {url}")
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=300.0) as client:
+                    resp = await client.post(url, headers=self.auth_header, data=data)
+                    logger.info(f"ADE Extract response: status={resp.status_code}")
+                    resp.raise_for_status()
+                    result = resp.json()
+                    logger.info(f"ADE Extract success: returned data")
+                    return result
+            except httpx.HTTPStatusError as e:
+                logger.error(f"ADE Extract HTTP error: status={e.response.status_code}, body={e.response.text[:500]}")
+                if e.response.status_code == 429 and attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 5  # Exponential backoff: 5s, 10s, 20s
+                    logger.warning(f"Rate limited (429), retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                raise
+            except httpx.HTTPError as e:
+                logger.error(f"ADE Extract connection error: {str(e)}")
+                raise
 
     def _from_parse_only(self, parse_json: Dict[str, Any]) -> Dict[str, Any]:
         # Keep entities/tables empty; surface metadata and markdown as key_values summary
