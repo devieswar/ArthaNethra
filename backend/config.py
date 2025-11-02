@@ -24,7 +24,9 @@ class Settings(BaseSettings):
     
     # LandingAI ADE
     LANDINGAI_API_KEY: str
-    LANDINGAI_API_URL: str = "https://api.landing.ai/v1"
+    # Default to US region per docs; override in .env for EU as needed
+    # Docs: https://docs.landing.ai/api-reference/tools/
+    LANDINGAI_API_URL: str = "https://api.va.landing.ai/v1"
     
     # AWS Bedrock
     AWS_ACCESS_KEY_ID: str
@@ -34,12 +36,14 @@ class Settings(BaseSettings):
     
     # Weaviate
     WEAVIATE_URL: str = "http://localhost:8080"
+    ENABLE_WEAVIATE: bool = False
     WEAVIATE_API_KEY: Optional[str] = None
     
     # Neo4j
     NEO4J_URI: str = "bolt://localhost:7687"
     NEO4J_USER: str = "neo4j"
     NEO4J_PASSWORD: str
+    ENABLE_NEO4J: bool = False
     
     # Storage
     UPLOAD_DIR: str = "./uploads"

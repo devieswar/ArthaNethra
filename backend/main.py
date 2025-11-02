@@ -118,6 +118,47 @@ async def ingest_document(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@app.get(f"{settings.API_PREFIX}/documents")
+async def list_documents():
+    """List all uploaded/processed documents (prunes missing files)."""
+    import os
+    to_delete = []
+    results = []
+    for doc_id, doc in documents_store.items():
+        if not os.path.exists(doc.file_path):
+            to_delete.append(doc_id)
+            continue
+        results.append(doc.model_dump())
+    for doc_id in to_delete:
+        documents_store.pop(doc_id, None)
+        logger.info(f"Pruned missing document from store: {doc_id}")
+    return results
+
+
+@app.get(f"{settings.API_PREFIX}/documents/{{document_id}}")
+async def get_document(document_id: str):
+    """Get a single document by ID."""
+    document = documents_store.get(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return document.model_dump()
+
+
+@app.delete(f"{settings.API_PREFIX}/documents/{{document_id}}")
+async def delete_document(document_id: str):
+    """Delete a document and its file (best-effort)."""
+    document = documents_store.pop(document_id, None)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        import os
+        if os.path.exists(document.file_path):
+            os.remove(document.file_path)
+    except Exception as e:
+        logger.warning(f"Could not remove file for {document_id}: {e}")
+    return {"status": "deleted", "document_id": document_id}
+
+
 @app.post(f"{settings.API_PREFIX}/extract")
 async def extract_document(document_id: str):
     """
@@ -130,8 +171,12 @@ async def extract_document(document_id: str):
         Extraction results with entities and citations
     """
     try:
-        # Get document
+        # Get document (fallback to disk if missing from memory)
         document = documents_store.get(document_id)
+        if not document:
+            document = await ingestion_service.get_document(document_id)
+            if document:
+                documents_store[document_id] = document
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         
@@ -174,8 +219,12 @@ async def normalize_to_graph(document_id: str):
         Graph entities and edges
     """
     try:
-        # Get document
+        # Get document (fallback to disk if missing from memory)
         document = documents_store.get(document_id)
+        if not document:
+            document = await ingestion_service.get_document(document_id)
+            if document:
+                documents_store[document_id] = document
         if not document or not document.ade_output:
             raise HTTPException(
                 status_code=404,
@@ -362,6 +411,10 @@ async def get_evidence(
     """
     try:
         document = documents_store.get(document_id)
+        if not document:
+            document = await ingestion_service.get_document(document_id)
+            if document:
+                documents_store[document_id] = document
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         
