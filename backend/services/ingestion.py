@@ -2,6 +2,7 @@
 Document ingestion service
 """
 import os
+import mimetypes
 import uuid
 from pathlib import Path
 from typing import BinaryIO
@@ -81,23 +82,52 @@ class IngestionService:
     def _is_valid_file_type(self, mime_type: str) -> bool:
         """Check if file type is supported"""
         valid_types = [
+            # Documents
             "application/pdf",
+            "application/msword",  # .doc
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # .docx
+            "application/vnd.ms-powerpoint",  # .ppt
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",  # .pptx
+            "application/vnd.oasis.opendocument.text",  # .odt
+            "application/vnd.oasis.opendocument.presentation",  # .odp
+            # Images
+            "image/jpeg",
+            "image/png",
+            # Archives
             "application/zip",
             "application/x-zip-compressed",
+            # Optional tabular types if needed later
             "application/vnd.ms-excel",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "text/csv"
+            "text/csv",
         ]
         return mime_type in valid_types
     
-    async def get_document(self, document_id: str) -> Document:
+    async def get_document(self, document_id: str) -> Document | None:
         """
-        Retrieve document by ID
-        
-        TODO: Implement database storage
-        For now, this is a placeholder
+        Retrieve document by ID.
+        If not tracked in memory by the caller, attempt to reconstruct from disk
+        by locating a file named like {document_id}.* in the uploads directory.
         """
-        raise NotImplementedError("Database integration pending")
+        # Find a file that starts with the document_id in the upload dir
+        for path in self.upload_dir.glob(f"{document_id}.*"):
+            try:
+                stat = path.stat()
+                mime_type, _ = mimetypes.guess_type(str(path))
+                document = Document(
+                    id=document_id,
+                    filename=path.name,
+                    file_path=str(path),
+                    file_size=stat.st_size,
+                    mime_type=mime_type or "application/octet-stream",
+                    status=DocumentStatus.UPLOADED,
+                    uploaded_at=datetime.utcfromtimestamp(stat.st_mtime)
+                )
+                logger.info(f"Loaded document from disk: {document_id} -> {path}")
+                return document
+            except Exception as e:
+                logger.warning(f"Failed to load document {document_id} from {path}: {e}")
+        return None
     
     async def delete_document(self, document_id: str) -> bool:
         """

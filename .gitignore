@@ -39,11 +39,6 @@ uv.lock
 *.swo
 *~
 
-# Environment Variables
-.env
-.env.local
-.env.*.local
-
 # Node/Angular
 node_modules/
 dist/

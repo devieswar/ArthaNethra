@@ -115,6 +115,43 @@ class NormalizationService:
             )
             entities.extend(table_entities)
         
+        # Fallback: if no entities and we have key_values (e.g., only a summary),
+        # create a summary entity and basic metric entities extracted from text.
+        if not entities:
+            kvs = ade_output.get("key_values", []) or []
+            summary_text = None
+            for kv in kvs:
+                if isinstance(kv, dict) and kv.get("key") == "summary" and isinstance(kv.get("value"), str):
+                    summary_text = kv.get("value").strip()
+                    break
+            if summary_text:
+                # Summary entity
+                summary_entity = Entity(
+                    id=f"ent_{uuid.uuid4().hex[:12]}",
+                    type=EntityType.CLAUSE,
+                    name="Document Summary",
+                    properties={"text": summary_text},
+                    citations=[],
+                    document_id=document_id,
+                    graph_id=graph_id
+                )
+                entities.append(summary_entity)
+                # Basic metrics from text (percentages, currency amounts)
+                metrics = self._extract_metrics_from_text(summary_text)
+                for metric in metrics:
+                    metric_entity = Entity(
+                        id=f"ent_{uuid.uuid4().hex[:12]}",
+                        type=EntityType.METRIC,
+                        name=metric["name"],
+                        properties={"value": metric["value"], "unit": metric.get("unit")},
+                        citations=[],
+                        document_id=document_id,
+                        graph_id=graph_id
+                    )
+                    entities.append(metric_entity)
+                # Map for potential edges
+                entity_map[summary_entity.name] = summary_entity
+        
         return entities
     
     async def _create_edges(
@@ -172,12 +209,54 @@ class NormalizationService:
                             properties=other.properties
                         )
                         edges.append(edge)
+
+            # Link summary to metrics if present
+            if entity.type == EntityType.CLAUSE and entity.name == "Document Summary":
+                for other in entities:
+                    if other.type == EntityType.METRIC:
+                        edge = Edge(
+                            id=f"edge_{uuid.uuid4().hex[:12]}",
+                            source=entity.id,
+                            target=other.id,
+                            type=EdgeType.HAS_METRIC,
+                            graph_id=graph_id,
+                            properties={}
+                        )
+                        edges.append(edge)
         
         return edges
     
     def _map_entity_type(self, ade_type: str) -> EntityType:
         """Map ADE entity type to internal EntityType"""
         return self.entity_type_mapping.get(ade_type.upper())
+
+    def _extract_metrics_from_text(self, text: str) -> List[Dict[str, Any]]:
+        """Extract simple metrics from free text: percentages and currency amounts."""
+        import re
+        metrics: List[Dict[str, Any]] = []
+        # Percentages (e.g., 8%, 9.2%)
+        for match in re.finditer(r"(\d{1,3}(?:\.\d{1,2})?)%", text):
+            value = float(match.group(1))
+            metrics.append({"name": f"percentage_{match.group(1)}%", "value": value, "unit": "%"})
+        # Currency amounts (very simple matcher: $50M, $12M, $8.3M, 50M)
+        for match in re.finditer(r"\$?([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?)(\s*[MBKmbk])?", text):
+            raw = match.group(1)
+            unit = (match.group(2) or '').strip().upper()
+            try:
+                num = float(raw.replace(',', ''))
+            except Exception:
+                continue
+            # Normalize units
+            multiplier = 1.0
+            if unit == 'K':
+                multiplier = 1e3
+            elif unit == 'M':
+                multiplier = 1e6
+            elif unit == 'B':
+                multiplier = 1e9
+            value = num * multiplier
+            metrics.append({"name": f"amount_{raw}{unit}", "value": value, "unit": "USD"})
+        return metrics
     
     async def _extract_entities_from_table(
         self,
