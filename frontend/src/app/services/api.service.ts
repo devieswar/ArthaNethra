@@ -73,10 +73,11 @@ export class ApiService {
   }
 
   // Document processing pipeline
-  extractDocument(documentId: string): Observable<any> {
-    return this.http.post(`${this.baseUrl}/extract`, null, {
-      params: new HttpParams().set('document_id', documentId)
-    });
+  extractDocument(documentId: string, schemaName?: string, customSchema?: string): Observable<any> {
+    let params = new HttpParams().set('document_id', documentId);
+    if (schemaName) params = params.set('schema_name', schemaName);
+    if (customSchema) params = params.set('custom_schema', customSchema);
+    return this.http.post(`${this.baseUrl}/extract`, null, { params });
   }
 
   normalizeDocument(documentId: string): Observable<any> {
@@ -170,6 +171,36 @@ export class ApiService {
       ? `${this.baseUrl}/evidence/${documentId}?page=${page}`
       : `${this.baseUrl}/evidence/${documentId}`;
     return this.http.get(url, { responseType: 'blob' });
+  }
+
+  // Extraction progress
+  getExtractStatus(documentId: string): Observable<{ status: string; total?: number; completed?: number; failed?: number }> {
+    return this.http.get<{ status: string; total?: number; completed?: number; failed?: number }>(`${this.baseUrl}/extract/status`, {
+      params: new HttpParams().set('document_id', documentId)
+    });
+  }
+
+  // Extraction SSE stream
+  getExtractStream(documentId: string): EventSource {
+    const url = `${this.baseUrl}/extract/stream?document_id=${encodeURIComponent(documentId)}`;
+    return new EventSource(url);
+  }
+
+  // Jobs
+  getExtractJobs(): Observable<any[]> {
+    return this.http.get<any[]>(`${this.baseUrl}/extract/jobs`);
+  }
+
+  getExtractJob(jobId: string): Observable<any> {
+    return this.http.get<any>(`${this.baseUrl}/extract/jobs/${jobId}`);
+  }
+
+  getExtractJobResult(jobId: string): Observable<any> {
+    return this.http.get<any>(`${this.baseUrl}/extract/jobs/${jobId}/result`);
+  }
+
+  getExtractJobResultUrl(jobId: string): string {
+    return `${this.baseUrl}/extract/jobs/${jobId}/result`;
   }
 
   // Analytics endpoints

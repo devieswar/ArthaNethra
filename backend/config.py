@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
     CACHE_DIR: str = "./cache"
     MAX_UPLOAD_SIZE: int = 104857600  # 100MB
+    # ADE routing threshold: files larger than this use async jobs
+    ADE_SYNC_MAX_BYTES: int = 15728640  # 15MB default
     
     # Logging
     LOG_LEVEL: str = "INFO"

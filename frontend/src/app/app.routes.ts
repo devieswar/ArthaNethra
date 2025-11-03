@@ -14,6 +14,10 @@ export const routes: Routes = [
     loadComponent: () => import('./components/documents/documents.component').then(m => m.DocumentsComponent)
   },
   {
+    path: 'jobs',
+    loadComponent: () => import('./components/jobs/jobs.component').then(m => m.JobsComponent)
+  },
+  {
     path: 'graph',
     loadComponent: () => import('./components/graph/graph.component').then(m => m.GraphComponent)
   },
