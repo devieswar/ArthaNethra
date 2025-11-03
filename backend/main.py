@@ -18,8 +18,12 @@ from services import (
     RiskDetectionService,
     ChatbotService
 )
+from services import schemas as schema_presets
 from models import Document, Entity, Edge, Risk
 from loguru import logger
+import uuid
+import json
+from pathlib import Path
 
 # Configure logging
 logger.add(
@@ -69,6 +73,7 @@ chatbot_service = ChatbotService()
 # In-memory storage (TODO: replace with database)
 documents_store = {}
 graphs_store = {}
+jobs_store = {}
 
 
 # ============================================================================
@@ -160,7 +165,7 @@ async def delete_document(document_id: str):
 
 
 @app.post(f"{settings.API_PREFIX}/extract")
-async def extract_document(document_id: str):
+async def extract_document(document_id: str, schema_name: str | None = None, custom_schema: str | None = None):
     """
     Extract structured data from document using LandingAI ADE
     
@@ -181,9 +186,34 @@ async def extract_document(document_id: str):
             raise HTTPException(status_code=404, detail="Document not found")
         
         logger.info(f"Extracting document: {document_id}")
+
+        # Create job
+        job_id = f"job_{uuid.uuid4().hex[:12]}"
+        jobs_store[job_id] = {
+            "job_id": job_id,
+            "document_id": document_id,
+            "status": "processing",
+            "started_at": "now",
+            "total": None,
+            "completed": 0,
+            "failed": 0
+        }
+        
+        # Resolve schema
+        selected_schema = None
+        if schema_name:
+            selected_schema = schema_presets.presets.get(schema_name)
+        if custom_schema:
+            try:
+                selected_schema = json.loads(custom_schema)
+            except Exception as e:
+                logger.warning(f"Invalid custom_schema: {e}")
         
         # Extract with ADE
-        ade_output = await extraction_service.extract_document(document)
+        # Large/ZIP routing handled inside service; pass schema for Extract
+        ade_output = await extraction_service.extract_document(document) if selected_schema is None else (
+            await extraction_service._extract_via_parse_then_extract(document.file_path, document.filename, document.mime_type, selected_schema)
+        )
         
         # Update document
         document.ade_output = ade_output
@@ -193,6 +223,34 @@ async def extract_document(document_id: str):
         document.confidence_score = ade_output["metadata"]["confidence_score"]
         
         documents_store[document_id] = document
+        
+        # Update job
+        jobs_store[job_id].update({
+            "status": "completed",
+            "completed_at": "now",
+            "total": extraction_service.get_progress(document_id).get("total") if extraction_service.get_progress(document_id) else None,
+            "completed": extraction_service.get_progress(document_id).get("completed") if extraction_service.get_progress(document_id) else None,
+            "entities_count": len(ade_output.get("entities", [])),
+            "schema_name": schema_name or ("custom" if custom_schema else None)
+        })
+        # Persist result to cache
+        try:
+            jobs_dir = Path(settings.CACHE_DIR) / "jobs"
+            jobs_dir.mkdir(parents=True, exist_ok=True)
+            with open(jobs_dir / f"{job_id}.json", "w", encoding="utf-8") as f:
+                json.dump({
+                    "job": jobs_store[job_id],
+                    "response": {
+                        "extraction_id": document.extraction_id,
+                        "document_id": document_id,
+                        "status": "completed",
+                        "entities_count": len(ade_output.get("entities", [])),
+                        "ade_output": ade_output
+                    }
+                }, f)
+            jobs_store[job_id]["result_path"] = str(jobs_dir / f"{job_id}.json")
+        except Exception as e:
+            logger.warning(f"Could not persist job {job_id}: {e}")
         
         return {
             "extraction_id": document.extraction_id,
@@ -205,6 +263,79 @@ async def extract_document(document_id: str):
     except Exception as e:
         logger.error(f"Extraction error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(f"{settings.API_PREFIX}/extract/status")
+async def get_extract_status(document_id: str):
+    """Return extraction progress for a document (if available)."""
+    progress = extraction_service.get_progress(document_id)
+    return progress or {"status": "unknown"}
+
+
+@app.get(f"{settings.API_PREFIX}/extract/jobs")
+async def list_extract_jobs():
+    """List extraction jobs (in-memory)."""
+    return list(jobs_store.values())
+
+
+@app.get(f"{settings.API_PREFIX}/extract/jobs/{{job_id}}")
+async def get_extract_job(job_id: str):
+    job = jobs_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    # If result persisted, try to read preview
+    preview = None
+    try:
+        if job.get("result_path"):
+            with open(job["result_path"], "r", encoding="utf-8") as f:
+                data = json.load(f)
+                preview = {
+                    "entities_count": data.get("response", {}).get("entities_count"),
+                    "total_pages": data.get("response", {}).get("ade_output", {}).get("metadata", {}).get("total_pages")
+                }
+    except Exception:
+        pass
+    return {"job": job, "preview": preview}
+
+
+@app.get(f"{settings.API_PREFIX}/extract/stream")
+async def stream_extract_status(document_id: str):
+    """Server-Sent Events stream for extraction progress."""
+    async def event_generator():
+        import asyncio
+        last = None
+        while True:
+            progress = extraction_service.get_progress(document_id) or {"status": "unknown"}
+            if progress != last:
+                try:
+                    payload = json.dumps(progress)
+                except Exception:
+                    payload = "{}"
+                yield f"data: {payload}\n\n"
+                last = progress
+            # End when completed or failed
+            status = str(progress.get("status", "")).lower()
+            if status in {"completed", "failed"}:
+                break
+            await asyncio.sleep(0.5)
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.get(f"{settings.API_PREFIX}/extract/jobs/{{job_id}}/result")
+async def get_extract_job_result(job_id: str):
+    job = jobs_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    result = None
+    try:
+        if job.get("result_path"):
+            with open(job["result_path"], "r", encoding="utf-8") as f:
+                result = json.load(f)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Job result not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return result or {"job": job}
 
 
 @app.post(f"{settings.API_PREFIX}/normalize")
