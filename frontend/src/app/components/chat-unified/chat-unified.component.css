@@ -1,0 +1,151 @@
+:host {
+  display: block;
+  height: 100vh;
+}
+
+/* Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Fade In Animation */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Markdown Prose Styling for Messages */
+.prose {
+  max-width: none;
+}
+
+.prose h1, .prose h2, .prose h3 {
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+  font-weight: 600;
+}
+
+.prose ul, .prose ol {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+  padding-left: 1.5em;
+}
+
+.prose li {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+
+.prose code {
+  background-color: rgba(0, 0, 0, 0.05);
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.25rem;
+  font-size: 0.875em;
+}
+
+.prose pre {
+  background-color: #1e293b;
+  color: #e2e8f0;
+  padding: 1rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+}
+
+.prose pre code {
+  background-color: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+.prose-invert code {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.prose-invert pre {
+  background-color: rgba(0, 0, 0, 0.2);
+}
+
+.prose strong {
+  font-weight: 600;
+}
+
+.prose a {
+  color: #3b82f6;
+  text-decoration: underline;
+}
+
+.prose-invert a {
+  color: #93c5fd;
+}
+
+/* Citation Links */
+:host ::ng-deep .citation-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.85rem;
+  border: 1px solid rgba(16, 185, 129, 0.6);
+  border-radius: 9999px;
+  background-color: transparent;
+  color: #047857;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 2px rgba(16, 185, 129, 0.18);
+}
+
+:host ::ng-deep .citation-link:hover {
+  border-color: rgba(5, 150, 105, 0.9);
+  color: #065f46;
+  background-color: rgba(16, 185, 129, 0.1);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(16, 185, 129, 0.22);
+}
+
+:host ::ng-deep .prose-invert .citation-link {
+  border-color: rgba(110, 231, 183, 0.6);
+  color: #6ee7b7;
+  box-shadow: 0 1px 2px rgba(110, 231, 183, 0.28);
+}
+
+:host ::ng-deep .prose-invert .citation-link:hover {
+  border-color: rgba(167, 243, 208, 0.9);
+  color: #bbf7d0;
+  background-color: rgba(16, 185, 129, 0.2);
+  box-shadow: 0 4px 8px rgba(45, 212, 191, 0.35);
+}
+
+/* Textarea auto-resize */
+textarea {
+  field-sizing: content;
+}
+
