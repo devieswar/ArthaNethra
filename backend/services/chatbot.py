@@ -301,6 +301,13 @@ class ChatbotService:
             for e in context["entities"][:10]:  # Show first 10
                 entities_context += f"- {e.get('name')} ({e.get('type')})\n"
         
+            # Add document information for citations
+            if context.get("documents"):
+                entities_context += f"\n\nAvailable Documents (for citations):\n"
+                for doc in context.get("documents", []):
+                    entities_context += f"- {doc.get('filename')} (ID: {doc.get('id')})\n"
+                entities_context += f"\nWhen citing these documents, use format: [Source: {context.get('documents', [{}])[0].get('filename', 'Document')}](doc:{context.get('documents', [{}])[0].get('id', '')})\n"
+        
         system_prompt = f"""You are ArthaNethra, an AI financial investigation assistant.
         
 Your role is to help analysts understand complex financial documents by:
@@ -398,12 +405,35 @@ IMPORTANT INSTRUCTIONS:
 - If asked about risks, explain the concerning financial patterns in plain language
 General guidelines:
 - Always cite the document/page when you use evidence.
+- When referencing a document, create a clickable citation link using this format: [Source: Document Name](doc:DOCUMENT_ID) or [View Document](document:DOCUMENT_ID)
+  * Example: "Based on the [DocuSign Form 8-K](doc:doc_abc123), the revenue was..."
+  * Use the actual document IDs from the "Available Documents (for citations)" section above
+  * Place citation links naturally in your response where you reference document information
 - If nothing is found, say so plainly and suggest a next step (e.g. upload more data, relax the filter, or re-run indexing).
 - Include numbers or dates when they matter.
 - NEVER use technical jargon in your responses to users. Forbidden words: "knowledge graph", "graph_id", "entity", "metric_compute", "graph_query", "tool", "Neo4j", "Weaviate", "vector", "embedding", "property_threshold", "sequential_drop", etc.
 - Instead use natural business language: "financial data", "cities", "companies", "documents", "analysis", "search", "comparison", "found", "calculated"
 - When you use tools internally, NEVER mention the tool names or parameters to the user
 - Speak like a financial analyst, not a software engineer
+
+GRAPH DATA OUTPUT:
+At the END of your response, after your natural language answer, include a JSON block with graph data representing the key entities and relationships mentioned in your answer.
+Format it exactly like this (on separate lines after your answer):
+
+---GRAPH_DATA---
+{{
+  "entities": [
+    {{"id": "entity_1", "name": "EntityName", "type": "Organization|Money|Date|Person|Location", "properties": {{"key": "value"}}}},
+    ...
+  ],
+  "relationships": [
+    {{"from_entity_id": "entity_1", "to_entity_id": "entity_2", "relationship_type": "REPORTED|HAS_REVENUE|ACQUIRED|INVESTED_IN|etc", "properties": {{}}}},
+    ...
+  ]
+}}
+---END_GRAPH_DATA---
+
+Only include entities and relationships that are EXPLICITLY mentioned in your response.
 """
         
         try:
@@ -427,56 +457,71 @@ General guidelines:
             
             # Handle Claude response format
             content_blocks = response_body.get("content", [])
+            tool_result_messages: List[Dict[str, Any]] = []
             
+            # First, stream any text back to the UI
             for block in content_blocks:
                 if block["type"] == "text":
                     yield block["text"]
-                elif block["type"] == "tool_use":
-                    # Execute the tool
-                    tool_name = block["name"]
-                    tool_input = block["input"]
-                    tool_use_id = block["id"]
-                    
-                    logger.info(f"Executing tool: {tool_name} with input: {tool_input}")
-                    
-                    # Execute tool
+            
+            # Next, execute any requested tools and build tool_result messages
+            for block in content_blocks:
+                if block["type"] != "tool_use":
+                    continue
+                
+                tool_name = block["name"]
+                tool_input = block["input"]
+                tool_use_id = block["id"]
+                
+                logger.info(f"Executing tool: {tool_name} with input: {tool_input}")
+                
+                try:
                     tool_result = await self._execute_tool(tool_name, tool_input, context)
-                    
-                    # Send tool result back to Claude
-                    messages.append({
-                        "role": "assistant",
-                        "content": content_blocks
-                    })
-                    messages.append({
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_use_id,
-                                "content": json.dumps(tool_result)
-                            }
-                        ]
-                    })
-                    
-                    # Get final response from Claude
-                    final_request = {
-                        "messages": messages,
-                        "inferenceConfig": {
-                            "maxTokens": 4096,
-                            "temperature": 0.7,
-                            "topP": 0.9
-                        },
-                        "tools": self.tools
+                except Exception as tool_error:
+                    logger.exception(
+                        "Tool execution failed for %s with input %s", tool_name, tool_input
+                    )
+                    tool_result = {
+                        "error": "Tool execution failed.",
+                        "details": str(tool_error)
                     }
-                    if system_prompt:
-                        final_request["system"] = [{"text": system_prompt}]
+                
+                tool_result_messages.append({
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": json.dumps(tool_result)
+                        }
+                    ]
+                })
                     
-                    final_body = self._invoke_with_fallback(final_request)
-                    
-                    # Handle Claude response
-                    for final_block in final_body.get("content", []):
-                        if final_block["type"] == "text":
-                            yield final_block["text"]
+            # If there were tool calls, send the tool results back to Claude
+            if tool_result_messages:
+                messages.append({
+                    "role": "assistant",
+                    "content": content_blocks
+                })
+                messages.extend(tool_result_messages)
+                
+                final_request = {
+                    "messages": messages,
+                    "inferenceConfig": {
+                        "maxTokens": 4096,
+                        "temperature": 0.7,
+                        "topP": 0.9
+                    },
+                    "tools": self.tools
+                }
+                if system_prompt:
+                    final_request["system"] = [{"text": system_prompt}]
+                
+                final_body = self._invoke_with_fallback(final_request)
+                
+                for final_block in final_body.get("content", []):
+                    if final_block["type"] == "text":
+                        yield final_block["text"]
         
         except Exception as e:
             logger.error(f"Chat error: {str(e)}")
@@ -576,15 +621,15 @@ General guidelines:
                     if query_lower in e.get("name", "").lower() or
                        query_lower in str(e.get("properties", {})).lower()
                 ]
-
+                
                 if property_filters:
                     matching_entities = self._filter_entities_by_properties(matching_entities, property_filters)
-
+                
                 combined_results = matching_entities[:limit]
                 if combined_results:
                     sources.append("context")
                 logger.info(f"Context search returned {len(combined_results)} results")
-
+            
             # Deduplicate while preserving order and re-apply property filters as a safeguard
             seen_keys = set()
             deduped_results: List[Dict[str, Any]] = []

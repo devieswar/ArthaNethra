@@ -1334,13 +1334,44 @@ async def send_message(
             if not assistant_response:
                 assistant_response = "I couldn't generate a response."
         
+        # Parse graph data from response if present
+        graph_data = None
+        display_content = assistant_response
+        
+        if "---GRAPH_DATA---" in assistant_response and "---END_GRAPH_DATA---" in assistant_response:
+            try:
+                # Extract graph JSON
+                start_marker = "---GRAPH_DATA---"
+                end_marker = "---END_GRAPH_DATA---"
+                start_idx = assistant_response.index(start_marker) + len(start_marker)
+                end_idx = assistant_response.index(end_marker)
+                graph_json_str = assistant_response[start_idx:end_idx].strip()
+                
+                # Parse JSON
+                import json
+                graph_data = json.loads(graph_json_str)
+                
+                # Remove graph data from display content
+                display_content = assistant_response[:assistant_response.index(start_marker)].strip()
+                
+                logger.info(f"Extracted graph data: {len(graph_data.get('entities', []))} entities, {len(graph_data.get('relationships', []))} relationships")
+            except Exception as e:
+                logger.warning(f"Failed to parse graph data: {e}")
+                # Continue without graph data
+                pass
+        
         assistant_msg = {
             "id": f"msg_{uuid.uuid4().hex[:12]}",
             "session_id": session_id,
             "role": "assistant",
-            "content": assistant_response,
+            "content": display_content,
             "created_at": datetime.utcnow().isoformat()
         }
+        
+        # Add graph data if available
+        if graph_data:
+            assistant_msg["graphData"] = graph_data
+        
         chat_messages_store[session_id].append(assistant_msg)
         
         # Update session
