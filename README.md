@@ -150,7 +150,7 @@ docker-compose up -d
 # Neo4j: http://localhost:7474
 ```
 
-**📖 For detailed setup instructions, see [GETTING_STARTED.md](GETTING_STARTED.md)**
+**📖 For detailed setup instructions, see [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)**
 
 ### Code Quality
 
@@ -212,8 +212,8 @@ ArthaNethra/
 │   └── PROJECT_OVERVIEW.md
 ├── docker-compose.yml    # Docker orchestration
 ├── env.example           # Environment template
-├── GETTING_STARTED.md    # Setup guide
-├── HACKATHON_CHECKLIST.md
+├── docs/GETTING_STARTED.md    # Setup guide
+├── docs/HACKATHON_CHECKLIST.md
 ├── LICENSE
 └── README.md
 ```

@@ -5,8 +5,9 @@ Main entry point for the backend API
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
+from pydantic import BaseModel
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, List, Dict, Any
 import uvicorn
 
 from config import settings
@@ -18,12 +19,13 @@ from services import (
     RiskDetectionService,
     ChatbotService
 )
-from services import schemas as schema_presets
-from models import Document, Entity, Edge, Risk
+from models import Document, Entity, Edge, Risk, ChatSession, ChatMessage
+from models.document import DocumentStatus
 from loguru import logger
 import uuid
 import json
 from pathlib import Path
+from datetime import datetime
 
 # Configure logging
 logger.add(
@@ -34,13 +36,96 @@ logger.add(
 )
 
 
+# Initialize services (before app creation so they're available in lifespan)
+ingestion_service = IngestionService()
+extraction_service = ExtractionService()
+normalization_service = NormalizationService()
+indexing_service = IndexingService()
+risk_detection_service = RiskDetectionService()
+chatbot_service = ChatbotService()
+
+# Import persistence service
+from services.persistence import PersistenceService
+persistence_service = PersistenceService()
+
+
 # Lifespan context manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan events"""
+    """Application lifespan events - handles startup and shutdown"""
+    # Startup
     logger.info("🚀 Starting ArthaNethra API")
+    
+    # Load persisted state from disk
+    global documents_store, graphs_store, entities_store, chat_sessions_store, chat_messages_store, jobs_store, risks_store
+    
+    # Initialize stores
+    documents_store = {}
+    graphs_store = {}
+    entities_store = {}
+    chat_sessions_store = {}
+    chat_messages_store = {}
+    jobs_store = {}
+    risks_store = {}
+    
+    try:
+        docs, graphs, entities, sessions, messages, risks = persistence_service.load_all()
+        documents_store.update(docs)
+        graphs_store.update(graphs)
+        entities_store.update(entities)
+        chat_sessions_store.update(sessions)
+        chat_messages_store.update(messages)
+        risks_store.update(risks)
+        
+        # Restore entities into graphs_store for consistency
+        for graph_id, entity_list in entities.items():
+            if graph_id in graphs_store:
+                # Graph exists, just update entities
+                graphs_store[graph_id]["entities"] = entity_list
+            else:
+                # Graph doesn't exist (lost during save), reconstruct it
+                logger.warning(f"Reconstructing missing graph {graph_id} from entities")
+                # Find document_id from entities or documents
+                document_id = entity_list[0].document_id if entity_list else ""
+                graphs_store[graph_id] = {
+                    "id": graph_id,
+                    "graph_id": graph_id,
+                    "document_id": document_id,
+                    "entities": entity_list,
+                    "edges": [],  # Edges lost, will be empty
+                    "metadata": {}
+                }
+        
+        logger.info(f"📂 Restored state: {len(docs)} documents, {len(graphs_store)} graphs, {sum(len(e) for e in entities.values())} entities, {len(sessions)} sessions, {len(risks)} risk graphs")
+        
+        # Skip auto-indexing on startup (entities already in Weaviate/Neo4j volumes)
+        # Only index when new documents are uploaded
+        logger.info(f"📊 Skipping auto-index: {len(entities_store)} graphs already persisted in Weaviate/Neo4j")
+        
+    except Exception as e:
+        logger.warning(f"Could not load persisted state: {e}")
+    
     yield
+    
+    # Shutdown
     logger.info("👋 Shutting down ArthaNethra API")
+    
+    # Save state to disk before shutdown
+    try:
+        persistence_service.save_all(
+            documents_store, 
+            graphs_store, 
+            entities_store,
+            chat_sessions_store,
+            chat_messages_store,
+            risks_store
+        )
+        logger.info("💾 State saved to disk")
+    except Exception as e:
+        logger.error(f"Failed to save state: {e}")
+    
+    # Cleanup services
+    await extraction_service.close()
 
 
 # Create FastAPI app
@@ -62,18 +147,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize services
-ingestion_service = IngestionService()
-extraction_service = ExtractionService()
-normalization_service = NormalizationService()
-indexing_service = IndexingService()
-risk_detection_service = RiskDetectionService()
-chatbot_service = ChatbotService()
-
 # In-memory storage (TODO: replace with database)
-documents_store = {}
-graphs_store = {}
-jobs_store = {}
+# Stores are initialized in lifespan context
 
 
 # ============================================================================
@@ -88,6 +163,54 @@ async def root():
         "version": settings.APP_VERSION,
         "status": "healthy"
     }
+
+
+@app.get(f"{settings.API_PREFIX}/health")
+async def health_check():
+    """Detailed health check for frontend"""
+    from datetime import datetime
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "version": settings.APP_VERSION,
+        "services": {
+            "weaviate": indexing_service.weaviate_client is not None,
+            "neo4j": indexing_service.neo4j_driver is not None,
+            "bedrock": chatbot_service.bedrock is not None
+        }
+    }
+
+
+@app.get(f"{settings.API_PREFIX}/documents")
+async def get_all_documents():
+    """
+    Get all documents from the store
+    
+    Returns:
+        List of all document metadata with entity/edge counts
+    """
+    try:
+        documents = []
+        for doc_id, doc in documents_store.items():
+            doc_dict = doc.model_dump()
+            # The document already has entities_count and edges_count from normalization
+            # But ensure they're up to date with latest data
+            if doc.graph_id and doc.graph_id in graphs_store:
+                graph = graphs_store[doc.graph_id]
+                doc_dict['entities_count'] = len(graph.get("entities", []))
+                doc_dict['edges_count'] = len(graph.get("edges", []))
+            elif not doc.graph_id:
+                # Document not yet normalized
+                doc_dict['entities_count'] = 0
+                doc_dict['edges_count'] = 0
+            
+            documents.append(doc_dict)
+        
+        logger.info(f"Returning {len(documents)} documents")
+        return documents
+    except Exception as e:
+        logger.error(f"Error fetching documents: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post(f"{settings.API_PREFIX}/ingest")
@@ -142,11 +265,23 @@ async def list_documents():
 
 @app.get(f"{settings.API_PREFIX}/documents/{{document_id}}")
 async def get_document(document_id: str):
-    """Get a single document by ID."""
+    """Get a single document by ID with markdown content"""
     document = documents_store.get(document_id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
-    return document.model_dump()
+    
+    # Serialize document
+    doc_dict = document.model_dump()
+    
+    # Add markdown content from ADE output or metadata if available
+    markdown_content = None
+    if document.ade_output and isinstance(document.ade_output, dict):
+        markdown_content = document.ade_output.get("markdown")
+    if not markdown_content and isinstance(document.metadata, dict):
+        markdown_content = document.metadata.get("markdown")
+    doc_dict["markdown_content"] = markdown_content
+    
+    return doc_dict
 
 
 @app.delete(f"{settings.API_PREFIX}/documents/{{document_id}}")
@@ -165,12 +300,16 @@ async def delete_document(document_id: str):
 
 
 @app.post(f"{settings.API_PREFIX}/extract")
-async def extract_document(document_id: str, schema_name: str | None = None, custom_schema: str | None = None):
+async def extract_document(
+    document_id: str,
+    use_adaptive_schema: bool = True
+):
     """
-    Extract structured data from document using LandingAI ADE
+    Extract structured data from document using LandingAI ADE.
     
     Args:
         document_id: Document ID to extract
+        use_adaptive_schema: Use deterministic schema analysis (default: True)
         
     Returns:
         Extraction results with entities and citations
@@ -199,25 +338,15 @@ async def extract_document(document_id: str, schema_name: str | None = None, cus
             "failed": 0
         }
         
-        # Resolve schema
-        selected_schema = None
-        if schema_name:
-            selected_schema = schema_presets.presets.get(schema_name)
-        if custom_schema:
-            try:
-                selected_schema = json.loads(custom_schema)
-            except Exception as e:
-                logger.warning(f"Invalid custom_schema: {e}")
-        
-        # Extract with ADE
-        # Large/ZIP routing handled inside service; pass schema for Extract
-        ade_output = await extraction_service.extract_document(document) if selected_schema is None else (
-            await extraction_service._extract_via_parse_then_extract(document.file_path, document.filename, document.mime_type, selected_schema)
-        )
+        # Extract with ADE (use adaptive schema for best results)
+        if use_adaptive_schema:
+            ade_output = await extraction_service.extract_document_with_adaptive_schema(document)
+        else:
+            ade_output = await extraction_service.extract_document(document)
         
         # Update document
         document.ade_output = ade_output
-        document.status = "extracted"
+        document.status = DocumentStatus.EXTRACTED
         document.extraction_id = ade_output["metadata"]["extraction_id"]
         document.total_pages = ade_output["metadata"]["total_pages"]
         document.confidence_score = ade_output["metadata"]["confidence_score"]
@@ -225,13 +354,14 @@ async def extract_document(document_id: str, schema_name: str | None = None, cus
         documents_store[document_id] = document
         
         # Update job
+        progress = extraction_service.get_progress(document_id)
         jobs_store[job_id].update({
             "status": "completed",
             "completed_at": "now",
-            "total": extraction_service.get_progress(document_id).get("total") if extraction_service.get_progress(document_id) else None,
-            "completed": extraction_service.get_progress(document_id).get("completed") if extraction_service.get_progress(document_id) else None,
+            "total": progress.get("total") if progress else None,
+            "completed": progress.get("completed") if progress else None,
             "entities_count": len(ade_output.get("entities", [])),
-            "schema_name": schema_name or ("custom" if custom_schema else None)
+            "schema_mode": "adaptive" if use_adaptive_schema else "default"
         })
         # Persist result to cache
         try:
@@ -289,9 +419,12 @@ async def get_extract_job(job_id: str):
         if job.get("result_path"):
             with open(job["result_path"], "r", encoding="utf-8") as f:
                 data = json.load(f)
+                response = data.get("response", {})
+                ade_output = response.get("ade_output", {}) if isinstance(response, dict) else {}
+                metadata = ade_output.get("metadata", {}) if isinstance(ade_output, dict) else {}
                 preview = {
-                    "entities_count": data.get("response", {}).get("entities_count"),
-                    "total_pages": data.get("response", {}).get("ade_output", {}).get("metadata", {}).get("total_pages")
+                    "entities_count": response.get("entities_count") if isinstance(response, dict) else None,
+                    "total_pages": metadata.get("total_pages") if isinstance(metadata, dict) else None
                 }
     except Exception:
         pass
@@ -363,7 +496,13 @@ async def normalize_to_graph(document_id: str):
             )
         
         logger.info(f"Normalizing document: {document_id}")
-        
+
+        # Track any existing graphs tied to this document so we can clean them up after regeneration
+        existing_graph_ids = [
+            gid for gid, graph in graphs_store.items()
+            if graph.get("document_id") == document_id
+        ]
+
         # Normalize to graph
         entities, edges = await normalization_service.normalize_to_graph(
             document.ade_output,
@@ -379,10 +518,65 @@ async def normalize_to_graph(document_id: str):
                 "entities": entities,
                 "edges": edges
             }
+            # Also store entities in entities_store for persistence
+            entities_store[graph_id] = entities
             document.graph_id = graph_id
             document.entities_count = len(entities)
             document.edges_count = len(edges)
-            document.status = "normalized"
+            document.status = DocumentStatus.NORMALIZED
+            documents_store[document_id] = document
+
+            # Remove any stale graphs previously associated with this document
+            stale_graph_ids = [gid for gid in existing_graph_ids if gid != graph_id]
+            for stale_id in stale_graph_ids:
+                removed_graph = graphs_store.pop(stale_id, None)
+                removed_entities = entities_store.pop(stale_id, None)
+                removed_risks = risks_store.pop(stale_id, None)
+                entities_count = len(removed_entities or [])
+                risk_count = len(removed_risks or [])
+                logger.info(
+                    f"🧹 Removed stale graph {stale_id} for document {document_id}"
+                    f" (entities: {entities_count}, risks: {risk_count})"
+                )
+            
+            # Run risk detection
+            logger.info(f"Running risk detection for document: {document_id}")
+            try:
+                # Rule-based detection
+                rule_risks = await risk_detection_service.detect_risks(entities, document_id, graph_id)
+                
+                # LLM-based anomaly detection
+                llm_risks = await risk_detection_service.detect_llm_anomalies(entities, document_id, graph_id)
+                
+                # Combine all risks
+                all_risks = rule_risks + llm_risks
+                
+                # Store risks
+                if all_risks:
+                    risks_store[graph_id] = all_risks
+                    logger.info(f"Detected {len(all_risks)} risks ({len(rule_risks)} rule-based, {len(llm_risks)} LLM-based)")
+                    
+                    # Save risks to disk immediately
+                    try:
+                        persistence_service.save_risks(risks_store)
+                        logger.info(f"💾 Saved {len(all_risks)} risks to disk")
+                    except Exception as save_error:
+                        logger.error(f"Failed to save risks: {save_error}")
+                else:
+                    logger.info("No risks detected")
+            except Exception as risk_error:
+                logger.error(f"Risk detection failed: {risk_error}")
+                # Continue even if risk detection fails
+
+            # Persist updated document + graph state (including cleanup)
+            try:
+                persistence_service.save_documents(documents_store)
+                persistence_service.save_graphs(graphs_store)
+                persistence_service.save_entities(entities_store)
+                persistence_service.save_risks(risks_store)
+                logger.debug("💾 Persisted updated document and graph state after normalization")
+            except Exception as persist_error:
+                logger.error(f"Failed to persist updated normalization state: {persist_error}")
         
         return {
             "graph_id": graph_id,
@@ -415,20 +609,36 @@ async def index_graph(graph_id: str):
         logger.info(f"Indexing graph: {graph_id}")
         
         # Index entities
-        entity_stats = await indexing_service.index_entities(graph["entities"])
+        entities = graph.get("entities", [])
+        if not entities:
+            raise HTTPException(status_code=400, detail="Graph has no entities to index")
+        entity_stats = await indexing_service.index_entities(entities)
         
         # Index edges
-        edge_stats = await indexing_service.index_edges(graph["edges"])
+        edges = graph.get("edges", [])
+        edge_stats = await indexing_service.index_edges(edges)
         
-        # Update document status
-        document_id = graph["document_id"]
+        # Index full document text for semantic search
+        document_id = graph.get("document_id", "")
+        chunk_stats = {"chunks_indexed": 0}
         if document_id in documents_store:
-            documents_store[document_id].status = "indexed"
+            document = documents_store[document_id]
+            markdown = document.metadata.get("markdown", "")
+            if markdown:
+                logger.info(f"Indexing document text chunks for: {document_id}")
+                chunk_stats =                 await indexing_service.index_document_text(
+                    document_id=document_id,
+                    markdown=markdown,
+                    filename=document.filename,
+                    entities=entities
+                )
+            documents_store[document_id].status = DocumentStatus.INDEXED
         
         return {
             "indexed_at": "now",
             **entity_stats,
-            **edge_stats
+            **edge_stats,
+            **chunk_stats
         }
         
     except Exception as e:
@@ -456,16 +666,19 @@ async def detect_risks(graph_id: str):
         logger.info(f"Detecting risks for graph: {graph_id}")
         
         # Detect risks
+        entities = graph.get("entities", [])
+        document_id = graph.get("document_id", "")
+        
         risks = await risk_detection_service.detect_risks(
-            graph["entities"],
-            graph["document_id"],
+            entities,
+            document_id,
             graph_id
         )
         
         # Also check for missing covenants
         covenant_risks = await risk_detection_service.detect_missing_covenants(
-            graph["entities"],
-            graph["document_id"],
+            entities,
+            document_id,
             graph_id
         )
         risks.extend(covenant_risks)
@@ -490,39 +703,115 @@ async def detect_risks(graph_id: str):
 async def chat_with_bot(
     message: str,
     graph_id: Optional[str] = None,
-    document_id: Optional[str] = None
+    document_id: Optional[str] = None,
+    stream: bool = True
 ):
     """
-    Ask the AI chatbot a question
+    Ask the AI chatbot a question with full graph context
     
     Args:
         message: User question
         graph_id: Optional graph context
         document_id: Optional document context
+        stream: Whether to stream response (default: True)
         
     Returns:
-        Streaming AI response
+        Streaming AI response (Server-Sent Events) with graph-augmented context
     """
     try:
         logger.info(f"Chat request: {message[:100]}")
         
+        # Build rich context from knowledge graph
         context = {
             "graph_id": graph_id,
-            "document_id": document_id
+            "document_id": document_id,
+            "entities": [],
+            "documents": [],
+            "risks": []
         }
         
-        async def generate():
-            async for chunk in chatbot_service.chat(message, context):
-                yield chunk
+        # Add all available entities to context
+        all_entities = []
+        for graph in graphs_store.values():
+            all_entities.extend(graph.get("entities", []))
         
-        return StreamingResponse(
-            generate(),
-            media_type="text/plain"
-        )
+        if all_entities:
+            # Convert entities to simple dict for LLM context
+            context["entities"] = [
+                {
+                    "id": e.id,
+                    "type": e.type.value if hasattr(e.type, 'value') else str(e.type),
+                    "name": e.name,
+                    "properties": e.properties
+                }
+                for e in all_entities[:50]  # Limit to 50 for token efficiency
+            ]
+        
+        # Add document metadata
+        context["documents"] = [
+            {
+                "id": doc.id,
+                "filename": doc.filename,
+                "status": doc.status.value if hasattr(doc.status, 'value') else str(doc.status)
+            }
+            for doc in documents_store.values()
+        ]
+        
+        # Add risk information (if we had risks_store)
+        context["total_entities"] = len(all_entities)
+        context["total_documents"] = len(documents_store)
+        context["total_graphs"] = len(graphs_store)
+        
+        if stream:
+            # Stream response using Server-Sent Events
+            async def generate():
+                try:
+                    async for chunk in chatbot_service.chat(message, context):
+                        # SSE format: data: {content}\n\n
+                        yield f"data: {json.dumps({'content': chunk, 'done': False})}\n\n"
+                    # Send completion signal
+                    yield f"data: {json.dumps({'content': '', 'done': True})}\n\n"
+                except Exception as e:
+                    logger.error(f"Stream error: {str(e)}")
+                    error_msg = f"Sorry, I encountered an error: {str(e)}"
+                    yield f"data: {json.dumps({'content': error_msg, 'error': True, 'done': True})}\n\n"
+            
+            return StreamingResponse(
+                generate(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no"
+                }
+            )
+        else:
+            # Non-streaming fallback
+            response_text = ""
+            async for chunk in chatbot_service.chat(message, context):
+                response_text += chunk
+        
+            return {
+                "response": response_text,
+                "message": message,
+                "timestamp": "now"
+            }
         
     except Exception as e:
         logger.error(f"Chat error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Return error as SSE if streaming, else JSON
+        if stream:
+            async def error_stream():
+                error_msg = "I'm having trouble processing that request. Try asking about specific companies, loans, or financial metrics."
+                yield f"data: {json.dumps({'content': error_msg, 'error': True, 'done': True})}\n\n"
+            return StreamingResponse(error_stream(), media_type="text/event-stream")
+        else:
+            return {
+                "response": "I'm having trouble processing that request.",
+                "message": message,
+                "error": str(e),
+                "timestamp": "now"
+            }
 
 
 @app.get(f"{settings.API_PREFIX}/evidence/{{document_id}}")
@@ -576,10 +865,10 @@ async def get_graph(graph_id: str):
         raise HTTPException(status_code=404, detail="Graph not found")
     
     return {
-        "graph_id": graph["id"],
-        "document_id": graph["document_id"],
-        "entities": [e.model_dump() for e in graph["entities"]],
-        "edges": [e.model_dump() for e in graph["edges"]]
+        "graph_id": graph.get("id", graph_id),
+        "document_id": graph.get("document_id", ""),
+        "entities": [e.model_dump() for e in graph.get("entities", [])],
+        "edges": [e.model_dump() for e in graph.get("edges", [])]
     }
 
 
@@ -604,6 +893,633 @@ async def query_graph(
     except Exception as e:
         logger.error(f"Query error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(f"{settings.API_PREFIX}/entities")
+async def list_entities():
+    """
+    List all entities from all graphs
+    
+    Returns:
+        List of all entities
+    """
+    all_entities = []
+    for graph in graphs_store.values():
+        entities = graph.get("entities", [])
+        all_entities.extend([e.model_dump() for e in entities])
+    return all_entities
+
+
+@app.get(f"{settings.API_PREFIX}/entities/graph/{{graph_id}}")
+async def get_entities_by_graph(graph_id: str):
+    """
+    Get all entities for a specific graph
+    
+    Args:
+        graph_id: Knowledge graph identifier
+        
+    Returns:
+        List of entities in the graph
+    """
+    try:
+        if graph_id not in graphs_store:
+            raise HTTPException(status_code=404, detail="Graph not found")
+        
+        graph = graphs_store[graph_id]
+        entities = graph.get("entities", [])
+        
+        # Convert to dict format
+        entities_list = []
+        for entity in entities:
+            entity_dict = {
+                "id": entity.id,
+                "type": entity.type.value if hasattr(entity.type, 'value') else str(entity.type),
+                "name": entity.name,
+                "properties": entity.properties,
+                "document_id": entity.document_id,
+                "graph_id": entity.graph_id
+            }
+            entities_list.append(entity_dict)
+        
+        logger.info(f"Returning {len(entities_list)} entities for graph {graph_id}")
+        return entities_list
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching entities for graph {graph_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(f"{settings.API_PREFIX}/entities/{{entity_id}}")
+async def get_entity(entity_id: str):
+    """
+    Get a single entity by ID
+    
+    Args:
+        entity_id: Entity ID
+        
+    Returns:
+        Entity details
+    """
+    for graph in graphs_store.values():
+        entities = graph.get("entities", [])
+        for entity in entities:
+            if entity.id == entity_id:
+                return entity.model_dump()
+    raise HTTPException(status_code=404, detail="Entity not found")
+
+
+@app.get(f"{settings.API_PREFIX}/entities/search")
+async def search_entities(q: str = Query(..., description="Search query")):
+    """
+    Search entities by name or properties
+    
+    Args:
+        q: Search query string
+        
+    Returns:
+        Matching entities
+    """
+    query_lower = q.lower()
+    matching_entities = []
+    
+    for graph in graphs_store.values():
+        entities = graph.get("entities", [])
+        for entity in entities:
+            # Search in name and properties
+            if query_lower in entity.name.lower():
+                matching_entities.append(entity.model_dump())
+            elif any(query_lower in str(v).lower() for v in entity.properties.values()):
+                matching_entities.append(entity.model_dump())
+    
+    return matching_entities
+
+
+@app.get(f"{settings.API_PREFIX}/risks/{{risk_id}}")
+async def get_risk(risk_id: str):
+    """
+    Get a single risk by ID
+    
+    Args:
+        risk_id: Risk ID
+        
+    Returns:
+        Risk details
+    """
+    # TODO: Implement risk storage and retrieval
+    raise HTTPException(status_code=404, detail="Risk not found")
+
+
+@app.get(f"{settings.API_PREFIX}/risks/entity/{{entity_id}}")
+async def get_risks_by_entity(entity_id: str):
+    """
+    Get all risks associated with an entity
+    
+    Args:
+        entity_id: Entity ID
+        
+    Returns:
+        List of risks for this entity
+    """
+    # TODO: Implement risk-entity association
+    return []
+
+
+@app.get(f"{settings.API_PREFIX}/relationships")
+async def get_relationships(
+    limit: int = Query(100, ge=1, le=1000)
+) -> List[Dict[str, Any]]:
+    """Get all relationships/edges from the knowledge graph"""
+    try:
+        # Collect all edges from all graphs
+        relationships = []
+        for graph in graphs_store.values():
+            for edge in graph.get("edges", []):
+                # Edge model uses: source, target, type (EdgeType enum)
+                # Convert to frontend-friendly format
+                edge_dict = edge.model_dump() if hasattr(edge, 'model_dump') else edge
+                
+                rel_data = {
+                    "id": edge_dict.get("id", ""),
+                    "from_entity_id": edge_dict.get("source", ""),  # Edge.source -> from_entity_id
+                    "to_entity_id": edge_dict.get("target", ""),    # Edge.target -> to_entity_id
+                    "relationship_type": edge_dict.get("type", "") if isinstance(edge_dict.get("type"), str) else str(edge_dict.get("type", "")),  # EdgeType enum -> string
+                    "properties": edge_dict.get("properties", {})
+                }
+                relationships.append(rel_data)
+                if len(relationships) >= limit:
+                    break
+            if len(relationships) >= limit:
+                break
+        
+        return relationships[:limit]
+    except Exception as e:
+        logger.error(f"Error fetching relationships: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(f"{settings.API_PREFIX}/relationships/graph/{{graph_id}}")
+async def get_relationships_by_graph(graph_id: str) -> List[Dict[str, Any]]:
+    """Get all relationships/edges for a specific knowledge graph"""
+    try:
+        if graph_id not in graphs_store:
+            raise HTTPException(status_code=404, detail="Graph not found")
+        
+        graph = graphs_store[graph_id]
+        relationships = []
+        
+        for edge in graph.get("edges", []):
+            # Edge model uses: source, target, type (EdgeType enum)
+            # Convert to frontend-friendly format
+            edge_dict = edge.model_dump() if hasattr(edge, 'model_dump') else edge
+            
+            rel_data = {
+                "id": edge_dict.get("id", ""),
+                "from_entity_id": edge_dict.get("source", ""),  # Edge.source -> from_entity_id
+                "to_entity_id": edge_dict.get("target", ""),    # Edge.target -> to_entity_id
+                "relationship_type": edge_dict.get("type", "") if isinstance(edge_dict.get("type"), str) else str(edge_dict.get("type", "")),  # EdgeType enum -> string
+                "properties": edge_dict.get("properties", {})
+            }
+            relationships.append(rel_data)
+        
+        logger.info(f"Returning {len(relationships)} relationships for graph {graph_id}")
+        return relationships
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching relationships for graph {graph_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(f"{settings.API_PREFIX}/analytics/dashboard")
+async def get_dashboard_analytics():
+    """
+    Get dashboard analytics and statistics
+    
+    Returns:
+        Dashboard statistics
+    """
+    total_documents = len(documents_store)
+    total_graphs = len(graphs_store)
+    
+    # Count entities and edges
+    total_entities = 0
+    total_edges = 0
+    entity_types = {}
+    
+    for graph in graphs_store.values():
+        entities = graph.get("entities", [])
+        edges = graph.get("edges", [])
+        total_entities += len(entities)
+        total_edges += len(edges)
+        
+        for entity in entities:
+            entity_type = entity.type.value
+            entity_types[entity_type] = entity_types.get(entity_type, 0) + 1
+    
+    # Count documents by status
+    status_counts = {}
+    for doc in documents_store.values():
+        status = doc.status.value
+        status_counts[status] = status_counts.get(status, 0) + 1
+    
+    return {
+        "total_documents": total_documents,
+        "total_graphs": total_graphs,
+        "total_entities": total_entities,
+        "total_edges": total_edges,
+        "entity_types": entity_types,
+        "document_status": status_counts,
+        "total_risks": 0  # TODO: Track risks
+    }
+
+
+@app.get(f"{settings.API_PREFIX}/analytics/risk-trends")
+async def get_risk_trends():
+    """
+    Get risk trends over time
+    
+    Returns:
+        Risk trend data
+    """
+    # TODO: Implement risk tracking over time
+    return {
+        "trends": [],
+        "severity_distribution": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0
+        }
+    }
+
+
+# ============================================================================
+# CHAT SESSION ENDPOINTS
+# ============================================================================
+
+@app.get(f"{settings.API_PREFIX}/chat/sessions")
+async def get_chat_sessions() -> List[Dict[str, Any]]:
+    """Get all chat sessions"""
+    return list(chat_sessions_store.values())
+
+
+@app.post(f"{settings.API_PREFIX}/chat/sessions")
+async def create_chat_session(name: str = "New Chat") -> Dict[str, Any]:
+    """Create a new chat session"""
+    session_id = f"session_{uuid.uuid4().hex[:12]}"
+    session = {
+        "id": session_id,
+        "name": name,
+        "document_ids": [],
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+        "message_count": 0
+    }
+    chat_sessions_store[session_id] = session
+    chat_messages_store[session_id] = []
+    logger.info(f"📝 Created chat session: {session_id}")
+    return session
+
+
+@app.get(f"{settings.API_PREFIX}/chat/sessions/{{session_id}}")
+async def get_chat_session(session_id: str) -> Dict[str, Any]:
+    """Get a specific chat session"""
+    if session_id not in chat_sessions_store:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    return chat_sessions_store[session_id]
+
+
+class UpdateSessionRequest(BaseModel):
+    name: Optional[str] = None
+    document_ids: Optional[List[str]] = None
+
+
+@app.put(f"{settings.API_PREFIX}/chat/sessions/{{session_id}}")
+async def update_chat_session(
+    session_id: str,
+    update_data: UpdateSessionRequest
+) -> Dict[str, Any]:
+    """Update a chat session (name and/or document_ids)"""
+    if session_id not in chat_sessions_store:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    
+    session = chat_sessions_store[session_id]
+    if update_data.name is not None:
+        session["name"] = update_data.name
+    if update_data.document_ids is not None:
+        session["document_ids"] = update_data.document_ids
+    session["updated_at"] = datetime.utcnow().isoformat()
+    
+    return session
+
+
+@app.delete(f"{settings.API_PREFIX}/chat/sessions/{{session_id}}")
+async def delete_chat_session(session_id: str):
+    """Delete a chat session"""
+    if session_id not in chat_sessions_store:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    
+    del chat_sessions_store[session_id]
+    if session_id in chat_messages_store:
+        del chat_messages_store[session_id]
+    
+    logger.info(f"🗑️  Deleted chat session: {session_id}")
+    return {"message": "Chat session deleted"}
+
+
+@app.get(f"{settings.API_PREFIX}/chat/sessions/{{session_id}}/messages")
+async def get_chat_messages(session_id: str) -> List[Dict[str, Any]]:
+    """Get all messages in a chat session"""
+    if session_id not in chat_sessions_store:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    return chat_messages_store.get(session_id, [])
+
+
+@app.post(f"{settings.API_PREFIX}/chat/sessions/{{session_id}}/messages")
+async def send_message(
+    session_id: str,
+    request: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Send a message in a chat session"""
+    if session_id not in chat_sessions_store:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    
+    message = request.get("message", "")
+    if not message:
+        raise HTTPException(status_code=400, detail="Message is required")
+    
+    session = chat_sessions_store[session_id]
+    
+    # Ensure messages list exists (might not if session restored from old state)
+    if session_id not in chat_messages_store:
+        chat_messages_store[session_id] = []
+    
+    # Add user message
+    user_msg = {
+        "id": f"msg_{uuid.uuid4().hex[:12]}",
+        "session_id": session_id,
+        "role": "user",
+        "content": message,
+        "created_at": datetime.utcnow().isoformat()
+    }
+    chat_messages_store[session_id].append(user_msg)
+    
+    # Get response from chatbot (only for documents in this session)
+    document_ids = session.get("document_ids", [])
+    
+    # Get graph_ids for all documents in session
+    graph_ids = []
+    for doc_id in document_ids:
+        if doc_id in documents_store:
+            doc = documents_store[doc_id]
+            # Find graph_id for this document
+            for gid, graph in graphs_store.items():
+                if graph.get("document_id") == doc_id:
+                    graph_ids.append(gid)
+                    break
+    
+    logger.info(f"Chat session {session_id}: {len(document_ids)} documents, {len(graph_ids)} graphs")
+    
+    try:
+        # Use first graph_id if available
+        graph_id = graph_ids[0] if graph_ids else None
+        document_id = document_ids[0] if document_ids else None
+        
+        if not graph_id:
+            logger.warning(f"No graph_id found for session {session_id}")
+            assistant_response = "Please upload or add a document to this chat session first."
+        else:
+            logger.info(f"Sending to chatbot: graph_id={graph_id}, document_id={document_id}")
+            
+            # Build rich context from knowledge graph
+            context = {
+                "graph_id": graph_id,
+                "document_id": document_id,
+                "entities": [],
+                "documents": []
+            }
+            
+            # Add entities from all graphs in session
+            for gid in graph_ids:
+                if gid in graphs_store:
+                    graph = graphs_store[gid]
+                    entities = graph.get("entities", [])
+                    # Convert entities to simple dict for LLM context
+                    context["entities"].extend([
+                        {
+                            "id": e.id,
+                            "type": e.type.value if hasattr(e.type, 'value') else str(e.type),
+                            "name": e.name,
+                            "properties": e.properties
+                        }
+                        for e in entities[:50]  # Limit for token efficiency
+                    ])
+            
+            # Add document metadata
+            context["documents"] = [
+                {"id": doc_id, "filename": documents_store[doc_id].filename}
+                for doc_id in document_ids if doc_id in documents_store
+            ]
+            
+            context["total_entities"] = len(context["entities"])
+            context["total_documents"] = len(document_ids)
+            context["total_graphs"] = len(graph_ids)
+            
+            # Collect streaming response into single string
+            assistant_response = ""
+            async for chunk in chatbot_service.chat(message, context):
+                assistant_response += chunk
+            
+            if not assistant_response:
+                assistant_response = "I couldn't generate a response."
+        
+        assistant_msg = {
+            "id": f"msg_{uuid.uuid4().hex[:12]}",
+            "session_id": session_id,
+            "role": "assistant",
+            "content": assistant_response,
+            "created_at": datetime.utcnow().isoformat()
+        }
+        chat_messages_store[session_id].append(assistant_msg)
+        
+        # Update session
+        session["message_count"] += 2
+        session["updated_at"] = datetime.utcnow().isoformat()
+        
+        return assistant_msg
+        
+    except Exception as e:
+        logger.error(f"Chat error: {e}")
+        error_msg = {
+            "id": f"msg_{uuid.uuid4().hex[:12]}",
+            "session_id": session_id,
+            "role": "assistant",
+            "content": f"Error: {str(e)}",
+            "created_at": datetime.utcnow().isoformat()
+        }
+        chat_messages_store[session_id].append(error_msg)
+        return error_msg
+
+
+@app.post(f"{settings.API_PREFIX}/chat/sessions/{{session_id}}/documents/{{document_id}}")
+async def add_document_to_session(session_id: str, document_id: str):
+    """Add a document to a chat session"""
+    if session_id not in chat_sessions_store:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    if document_id not in documents_store:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    session = chat_sessions_store[session_id]
+    if document_id not in session["document_ids"]:
+        session["document_ids"].append(document_id)
+        session["updated_at"] = datetime.utcnow().isoformat()
+    
+    return session
+
+
+@app.delete(f"{settings.API_PREFIX}/chat/sessions/{{session_id}}/documents/{{document_id}}")
+async def remove_document_from_session(session_id: str, document_id: str):
+    """Remove a document from a chat session"""
+    if session_id not in chat_sessions_store:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    
+    session = chat_sessions_store[session_id]
+    if document_id in session["document_ids"]:
+        session["document_ids"].remove(document_id)
+        session["updated_at"] = datetime.utcnow().isoformat()
+    
+    return session
+
+
+# ============================================================================
+# Risk Detection Endpoints
+# ============================================================================
+
+@app.get(f"{settings.API_PREFIX}/risks")
+async def get_all_risks() -> List[Dict[str, Any]]:
+    """Get all detected risks across all documents"""
+    all_risks = []
+    for graph_id, risks in risks_store.items():
+        for risk in risks:
+            all_risks.append(risk.model_dump())
+    
+    logger.info(f"Returning {len(all_risks)} risks")
+    return all_risks
+
+
+@app.get(f"{settings.API_PREFIX}/risks/graph/{{graph_id}}")
+async def get_risks_by_graph(graph_id: str) -> List[Dict[str, Any]]:
+    """Get risks for a specific knowledge graph"""
+    risks = risks_store.get(graph_id, [])
+    return [r.model_dump() for r in risks]
+
+
+@app.get(f"{settings.API_PREFIX}/risks/document/{{document_id}}")
+async def get_risks_by_document(document_id: str) -> Dict[str, Any]:
+    """Get risks for a specific document with summary"""
+    # Get document to find its current graph_id
+    document = documents_store.get(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail=f"Document {document_id} not found")
+    
+    # Use the graph_id from the document (most recent/current)
+    graph_id = document.graph_id
+    
+    if not graph_id:
+        return {
+            "document_id": document_id,
+            "risks": [],
+            "summary": risk_detection_service.calculate_risk_summary([])
+        }
+    
+    risks = risks_store.get(graph_id, [])
+    summary = risk_detection_service.calculate_risk_summary(risks)
+    
+    logger.info(f"📊 Fetched {len(risks)} risks for document {document_id} (graph: {graph_id})")
+    
+    return {
+        "document_id": document_id,
+        "graph_id": graph_id,
+        "risks": [r.model_dump() for r in risks],
+        "summary": summary
+    }
+
+
+@app.post(f"{settings.API_PREFIX}/risks/analyze/{{graph_id}}")
+async def analyze_risks(graph_id: str, run_llm: bool = True) -> Dict[str, Any]:
+    """
+    Run risk analysis on an existing graph
+    
+    Args:
+        graph_id: Knowledge graph ID
+        run_llm: Whether to run LLM-based anomaly detection (default: True)
+    """
+    if graph_id not in graphs_store:
+        raise HTTPException(status_code=404, detail="Graph not found")
+    
+    graph = graphs_store[graph_id]
+    entities = graph.get("entities", [])
+    document_id = graph.get("document_id", "")
+    
+    if not entities:
+        raise HTTPException(status_code=400, detail="No entities in graph")
+    
+    logger.info(f"Running risk analysis on graph: {graph_id}")
+    
+    # Rule-based detection
+    rule_risks = await risk_detection_service.detect_risks(entities, document_id, graph_id)
+    
+    llm_risks = []
+    if run_llm:
+        # LLM-based anomaly detection
+        llm_risks = await risk_detection_service.detect_llm_anomalies(entities, document_id, graph_id)
+    
+    # Combine and store
+    all_risks = rule_risks + llm_risks
+    risks_store[graph_id] = all_risks
+    
+    # Save risks to disk immediately
+    try:
+        persistence_service.save_risks(risks_store)
+        logger.info(f"💾 Saved {len(all_risks)} risks to disk")
+    except Exception as save_error:
+        logger.error(f"Failed to save risks: {save_error}")
+    
+    summary = risk_detection_service.calculate_risk_summary(all_risks)
+    
+    logger.info(f"Risk analysis complete: {len(all_risks)} risks detected")
+    
+    return {
+        "graph_id": graph_id,
+        "risks": [r.model_dump() for r in all_risks],
+        "summary": summary,
+        "rule_based_count": len(rule_risks),
+        "llm_based_count": len(llm_risks)
+    }
+
+
+# ============================================================================
+# Document PDF Serving
+# ============================================================================
+
+@app.get(f"{settings.API_PREFIX}/documents/{{document_id}}/pdf")
+async def get_document_pdf(document_id: str):
+    """Serve the original PDF document"""
+    document = documents_store.get(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    file_path = Path(document.file_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="PDF file not found")
+    
+    from fastapi.responses import FileResponse
+    return FileResponse(
+        path=str(file_path),
+        media_type="application/pdf",
+        filename=document.filename
+    )
 
 
 # ============================================================================

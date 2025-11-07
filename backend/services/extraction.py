@@ -5,32 +5,228 @@ import io
 import json
 import asyncio
 import os
-import zipfile
 import mimetypes
+import zipfile
 import httpx
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Optional
 from loguru import logger
 
 from config import settings
 from models.document import Document
+from services.markdown_analyzer import MarkdownSchemaAnalyzer
 
 
 class ExtractionService:
-    """Handles document extraction using LandingAI ADE API (synchronous Extract).
-
-    This implementation uses POST /v1/ade/extract for single files. If the source is a
-    ZIP archive, it will extract supported files and aggregate their results.
-    Docs: https://docs.landing.ai/api-reference/tools/
+    """Handles document extraction using LandingAI ADE API.
+    
+    Features:
+    - Parse documents to markdown using ADE
+    - Deterministic schema generation from table structure
+    - Automatic retry with exponential backoff
+    - Support for single files and ZIP archives
     """
     
     def __init__(self):
         self.api_url = settings.LANDINGAI_API_URL.rstrip("/")
         self.api_key = settings.LANDINGAI_API_KEY
         self.auth_header = {"Authorization": f"Bearer {self.api_key}"}
-        # Default schema name; can be adjusted later or made configurable
-        self.default_schema = "financial_entities"
         # In-memory progress tracking for extractions keyed by document_id
         self._progress: Dict[str, Dict[str, Any]] = {}
+        # Create reusable httpx client with retry support
+        self.timeout = httpx.Timeout(480.0, connect=10.0)  # 8min total, 10s connect
+        self._client: httpx.AsyncClient | None = None
+        # Deterministic schema analyzer (no LLM needed)
+        self.schema_analyzer = MarkdownSchemaAnalyzer()
+    
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Get or create the shared httpx client"""
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=self.timeout, limits=httpx.Limits(max_connections=20))
+        return self._client
+    
+    async def _retry_request(
+        self,
+        method: str,
+        url: str,
+        max_retries: int = 2,
+        initial_delay: float = 0.5,
+        max_delay: float = 8.0,
+        **kwargs
+    ) -> httpx.Response:
+        """
+        Execute HTTP request with exponential backoff retry logic.
+        
+        Retries on:
+        - Connection errors (APIConnectionError)
+        - 429 Rate Limit
+        - 408 Request Timeout
+        - 409 Conflict
+        - >= 500 Server errors
+        
+        Based on LandingAI SDK retry patterns.
+        """
+        client = await self._get_client()
+        last_exception = None
+        
+        for attempt in range(max_retries + 1):  # +1 for initial attempt
+            try:
+                resp = await client.request(method, url, **kwargs)
+                
+                # Check if response is retryable
+                status = resp.status_code
+                if status < 400:
+                    return resp
+                
+                # Don't retry on most client errors
+                if 400 <= status < 500:
+                    if status not in {408, 409, 429}:  # Non-retryable 4xx
+                        resp.raise_for_status()  # Raise immediately for non-retryable
+                    # Retryable 4xx - fall through to raise_for_status in except
+                
+                # 5xx errors and retryable 4xx - raise to trigger retry
+                resp.raise_for_status()
+                
+            except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
+                last_exception = e
+                
+                # If this was the last attempt, raise
+                if attempt >= max_retries:
+                    logger.error(f"Request failed after {max_retries + 1} attempts: {e}")
+                    raise
+                
+                # Calculate backoff delay
+                delay = min(initial_delay * (2 ** attempt), max_delay)
+                logger.warning(
+                    f"Request failed (attempt {attempt + 1}/{max_retries + 1}), "
+                    f"retrying in {delay:.2f}s: {e}"
+                )
+                await asyncio.sleep(delay)
+        
+        # Should never reach here, but for type safety
+        if last_exception:
+            raise last_exception
+        raise httpx.HTTPError("Request failed without exception")
+    
+    async def generate_adaptive_schema(
+        self,
+        markdown: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate an optimal extraction schema by analyzing the document structure.
+        Uses deterministic markdown analysis - no LLM needed!
+        
+        Args:
+            markdown: Parsed markdown from ADE Parse
+            metadata: Optional document metadata (filename, page count, etc.)
+            
+        Returns:
+            JSON Schema dict optimized for the document structure
+        """
+        try:
+            logger.info(f"🔍 DETERMINISTIC SCHEMA ANALYSIS - Starting...")
+            logger.info(f"📄 Markdown length: {len(markdown)} chars")
+            
+            # Use deterministic analyzer to understand structure
+            logger.info("🔧 Calling markdown analyzer...")
+            schema = self.schema_analyzer.analyze_and_generate_schema(markdown)
+            logger.info(f"✅ Schema analyzer returned schema with {len(schema.get('properties', {}))} properties")
+            
+            # Log the generated schema
+            logger.info(f"✨ SCHEMA GENERATED:")
+            logger.info(f"{'='*60}")
+            logger.info(json.dumps(schema, indent=2))
+            logger.info(f"{'='*60}")
+            
+            # Save schema to /tmp for inspection
+            import time
+            timestamp = int(time.time())
+            schema_file = f"/tmp/adaptive_schema_{timestamp}.json"
+            try:
+                with open(schema_file, "w", encoding="utf-8") as sf:
+                    json.dump({
+                        "document_metadata": metadata,
+                        "markdown_length": len(markdown),
+                        "generated_schema": schema,
+                        "timestamp": timestamp,
+                        "method": "deterministic_analysis"
+                    }, sf, indent=2)
+                logger.info(f"💾 Schema saved to: {schema_file}")
+            except Exception as e:
+                logger.warning(f"Could not save schema: {e}")
+            
+            return schema
+            
+        except Exception as e:
+            logger.error(f"Error in schema analysis: {e}", exc_info=True)
+            return self._get_default_schema()
+    
+    def _get_default_schema(self) -> Dict[str, Any]:
+        """Fallback default schema if adaptive generation fails"""
+        return {
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string", "description": "Executive summary of the document"}
+            }
+        }
+    
+    async def extract_document_with_adaptive_schema(self, document: Document) -> Dict[str, Any]:
+        """
+        Extract using AI-generated adaptive schema.
+        
+        Workflow:
+        1. Parse document with ADE → get markdown
+        2. Call Claude with markdown → generate optimal schema
+        3. Use schema for ADE Extract → get structured data
+        
+        This is the most intelligent extraction mode.
+        """
+        logger.info(f"Starting adaptive schema extraction for document: {document.id}")
+        
+        try:
+            if self._is_zip(document.file_path):
+                logger.warning("Adaptive schema not supported for ZIP files yet, using default extraction")
+                return await self.extract_document(document)
+            
+            # Parse first to get markdown
+            with open(document.file_path, "rb") as f:
+                content = f.read()
+            
+            parse_json = await self._ade_parse(document.filename, content, document.mime_type)
+            markdown = parse_json.get("markdown", "")
+            metadata = parse_json.get("metadata", {})
+            
+            # Store markdown in document for later use (chunking, search)
+            document.metadata["markdown"] = markdown
+            document.metadata["parse_metadata"] = metadata
+            
+            if not markdown:
+                logger.warning("No markdown from ADE Parse, falling back to default extraction")
+                return await self.extract_document(document)
+            
+            # Generate adaptive schema using Claude
+            logger.info("Generating adaptive schema with Claude...")
+            adaptive_schema = await self.generate_adaptive_schema(markdown, metadata)
+            
+            # Use the generated schema for extraction
+            logger.info(f"Extracting with adaptive schema: {len(adaptive_schema.get('properties', {}))} properties")
+            extract_json = await self._ade_extract(markdown, adaptive_schema)
+            
+            # Merge results
+            result = self._merge_parse_and_extract(parse_json, extract_json)
+            
+            logger.info(
+                f"Adaptive extraction completed for {document.id}: "
+                f"{len(result.get('entities', []))} entities, "
+                f"{len(result.get('key_values', []))} key-values"
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Adaptive extraction error for {document.id}: {str(e)}")
+            logger.info("Falling back to default extraction")
+            return await self.extract_document(document)
     
     async def extract_document(self, document: Document) -> Dict[str, Any]:
         """Extract structured data using ADE: Parse -> Extract (schema over markdown).
@@ -167,12 +363,36 @@ class ExtractionService:
     async def _ade_parse(self, filename: str, content: bytes, mime_type: str) -> Dict[str, Any]:
         url = f"{self.api_url}/ade/parse"
         files = {"document": (filename, io.BytesIO(content), mime_type)}
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.post(url, headers=self.auth_header, files=files)
-            resp.raise_for_status()
-            return resp.json()
+        resp = await self._retry_request("POST", url, headers=self.auth_header, files=files)
+        result = resp.json()
+        
+        # Log and save parsed markdown for inspection
+        if "markdown" in result:
+            markdown_content = result["markdown"]
+            logger.info(f"📄 ADE PARSE SUCCESS for '{filename}'")
+            logger.info(f"📊 Markdown length: {len(markdown_content)} characters")
+            logger.info(f"📝 First 500 chars of markdown:\n{'='*60}\n{markdown_content[:500]}...\n{'='*60}")
+            
+            # Save full markdown to /tmp for inspection
+            safe_filename = filename.replace("/", "_").replace(" ", "_")
+            markdown_file = f"/tmp/ade_parsed_{safe_filename}.md"
+            try:
+                with open(markdown_file, "w", encoding="utf-8") as mf:
+                    mf.write(f"# ADE Parse Result for: {filename}\n\n")
+                    mf.write(f"**File:** {filename}\n")
+                    mf.write(f"**MIME:** {mime_type}\n")
+                    mf.write(f"**Length:** {len(markdown_content)} characters\n\n")
+                    mf.write("---\n\n")
+                    mf.write(markdown_content)
+                logger.info(f"💾 Full markdown saved to: {markdown_file}")
+            except Exception as e:
+                logger.warning(f"Could not save markdown file: {e}")
+        else:
+            logger.warning(f"⚠️  ADE Parse returned no markdown for '{filename}'")
+        
+        return result
 
-    async def _ade_extract(self, markdown: str, schema: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    async def _ade_extract(self, markdown: str, schema: Dict[str, Any] | None = None, model: str = "extract-20251024") -> Dict[str, Any]:
         url = f"{self.api_url}/ade/extract"
         # Minimal default schema that extracts a free-form summary and any fields it can map.
         default_schema = {
@@ -181,14 +401,50 @@ class ExtractionService:
                 "summary": {"type": "string"}
             }
         }
+        
+        used_schema = schema or default_schema
+        
+        # Log schema being used
+        logger.info(f"🔍 ADE EXTRACT - Using Model: {model}")
+        logger.info(f"🔍 ADE EXTRACT - Using Schema:")
+        logger.info(f"{'='*60}")
+        logger.info(json.dumps(used_schema, indent=2))
+        logger.info(f"{'='*60}")
+        logger.info(f"📄 Markdown input length: {len(markdown)} characters")
+        
         data = {
-            "schema": json.dumps(schema or default_schema),  # send schema as JSON string per docs
-            "markdown": markdown
+            "schema": json.dumps(used_schema),  # send schema as JSON string per docs
+            "markdown": markdown,
+            "model": model  # Use the new extract model for better extraction
         }
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.post(url, headers=self.auth_header, data=data)
-            resp.raise_for_status()
-            return resp.json()
+        resp = await self._retry_request("POST", url, headers=self.auth_header, data=data)
+        result = resp.json()
+        
+        # Log extraction results
+        logger.info(f"✅ ADE EXTRACT SUCCESS")
+        logger.info(f"📦 Extraction result keys: {list(result.keys())}")
+        logger.info(f"📊 Full extraction result:")
+        logger.info(f"{'='*60}")
+        logger.info(json.dumps(result, indent=2))
+        logger.info(f"{'='*60}")
+        
+        # Save extraction result to /tmp for inspection
+        import time
+        timestamp = int(time.time())
+        result_file = f"/tmp/ade_extract_result_{timestamp}.json"
+        try:
+            with open(result_file, "w", encoding="utf-8") as rf:
+                json.dump({
+                    "schema_used": used_schema,
+                    "markdown_length": len(markdown),
+                    "extraction_result": result,
+                    "timestamp": timestamp
+                }, rf, indent=2)
+            logger.info(f"💾 Extraction result saved to: {result_file}")
+        except Exception as e:
+            logger.warning(f"Could not save extraction result: {e}")
+        
+        return result
 
     # ------------------------ ASYNC JOB HELPERS ------------------------
     async def _ade_parse_job(self, filename: str, content: bytes, mime_type: str) -> str:
@@ -196,33 +452,29 @@ class ExtractionService:
         url = f"{self.api_url}/ade/parse/jobs"
         files = {"document": (filename, io.BytesIO(content), mime_type)}
         data = {"split": "page"}
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.post(url, headers=self.auth_header, files=files, data=data)
-            resp.raise_for_status()
-            body = resp.json()
-            # Try multiple shapes defensively
-            job_id = (
-                body.get("job_id")
-                or body.get("metadata", {}).get("job_id")
-                or (body.get("job") or {}).get("id")
-            )
-            if not job_id:
-                logger.error(f"ADE parse job response missing job_id: {body}")
-                raise httpx.HTTPStatusError("Missing job_id in response", request=resp.request, response=resp)
-            return job_id
+        resp = await self._retry_request("POST", url, headers=self.auth_header, files=files, data=data)
+        body = resp.json()
+        # Try multiple shapes defensively
+        job_id = (
+            body.get("job_id")
+            or body.get("metadata", {}).get("job_id")
+            or (body.get("job") or {}).get("id")
+        )
+        if not job_id:
+            logger.error(f"ADE parse job response missing job_id: {body}")
+            raise httpx.HTTPStatusError("Missing job_id in response", request=resp.request, response=resp)
+        return job_id
 
     async def _ade_get_job(self, job_id: str) -> Dict[str, Any]:
         url = f"{self.api_url}/ade/jobs/{job_id}"
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            try:
-                resp = await client.get(url, headers=self.auth_header)
-                resp.raise_for_status()
-                return resp.json()
-            except httpx.HTTPStatusError as e:
-                # Some backends exhibit eventual consistency; treat early 404 as pending
-                if e.response is not None and e.response.status_code == 404:
-                    return {"status": "pending"}
-                raise
+        try:
+            resp = await self._retry_request("GET", url, headers=self.auth_header)
+            return resp.json()
+        except httpx.HTTPStatusError as e:
+            # Some backends exhibit eventual consistency; treat early 404 as pending
+            if e.response is not None and e.response.status_code == 404:
+                return {"status": "pending"}
+            raise
 
     async def _extract_via_jobs_bytes(self, filename: str, content: bytes, mime_type: str) -> Dict[str, Any]:
         """Submit parse job, poll until complete, then extract with schema."""
@@ -388,4 +640,19 @@ class ExtractionService:
                 "confidence": loc.get("confidence"),
             })
         return citations
+    
+    async def close(self):
+        """Close the httpx client and cleanup resources"""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+            logger.debug("ExtractionService: closed httpx client")
+    
+    async def __aenter__(self):
+        """Async context manager entry"""
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit"""
+        await self.close()
 

@@ -34,13 +34,7 @@ cd ArthaNethra
 
 ### 2. Set Up Environment Variables
 
-```bash
-# Copy the example environment file
-cp env.example .env
-
-# Edit .env with your actual API keys
-nano .env  # or use your favorite editor
-```
+Create a `.env` file in the root directory with your API keys:
 
 **Required variables:**
 ```bash
@@ -263,7 +257,6 @@ ArthaNethra/
 │   └── package.json        # Node dependencies
 ├── docs/                    # Documentation
 ├── docker-compose.yml       # Docker orchestration
-├── .env                     # Environment variables
 └── README.md                # Main documentation
 ```
 

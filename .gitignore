@@ -91,3 +91,4 @@ temp/
 
 # MyPy cache
 .mypy_cache/
+logs/

@@ -42,6 +42,7 @@ class Document(BaseModel):
     uploaded_at: datetime = Field(default_factory=datetime.utcnow)
     processed_at: Optional[datetime] = None
     error_message: Optional[str] = None
+    metadata: dict = Field(default_factory=dict, description="Additional metadata (markdown, parse info, etc.)")
     
     # ADE results
     ade_output: Optional[dict] = None
