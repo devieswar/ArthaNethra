@@ -32,7 +32,12 @@ class Settings(BaseSettings):
     AWS_ACCESS_KEY_ID: str
     AWS_SECRET_ACCESS_KEY: str
     AWS_REGION: str = "us-east-1"
-    BEDROCK_MODEL_ID: str = "anthropic.claude-3-sonnet-20240229-v1:0"
+    # Primary: Claude Sonnet 4.5 (best quality, excellent tool calling, natural language)
+    BEDROCK_MODEL_ID: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    # Fallback: Claude Haiku (fast, cheap when Sonnet is throttled)
+    BEDROCK_FALLBACK_MODELS: list = [
+        "anthropic.claude-3-haiku-20240307-v1:0",  # Claude Haiku
+    ]
     
     # Weaviate
     WEAVIATE_URL: str = "http://localhost:8080"
@@ -53,7 +58,7 @@ class Settings(BaseSettings):
     ADE_SYNC_MAX_BYTES: int = 15728640  # 15MB default
     
     # Logging
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: str = "DEBUG"  # Temporarily DEBUG to trace property extraction
     LOG_FILE: str = "logs/arthanethra.log"
     
     # JWT (for future auth)
