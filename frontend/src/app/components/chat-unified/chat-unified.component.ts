@@ -113,6 +113,7 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
   riskChartOptions: EChartsOption = {};
   markdownHtml: SafeHtml | null = null;
   isMarkdownFullscreen = false;
+  isPdfFullscreen = false;
   
   progressSteps: Array<{ name: string; label: string; status: 'pending' | 'active' | 'completed' | 'error' }> = [
     { name: 'upload', label: 'Uploading file...', status: 'pending' },
@@ -1100,6 +1101,17 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
 
   closeMarkdownFullscreen() {
     this.isMarkdownFullscreen = false;
+  }
+
+  openPdfFullscreen() {
+    if (!this.selectedDocument) {
+      return;
+    }
+    this.isPdfFullscreen = true;
+  }
+
+  closePdfFullscreen() {
+    this.isPdfFullscreen = false;
   }
 
   // Chat name editing methods

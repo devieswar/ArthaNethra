@@ -10,107 +10,107 @@ Financial AI Hackathon Championship 2025
 ## ✅ Mandatory Requirements
 
 ### 1. LandingAI ADE Integration
-- [ ] Obtain LandingAI API key
-- [ ] Implement document upload endpoint
-- [ ] Integrate ADE API for extraction
-- [ ] Parse ADE JSON output to entities
-- [ ] Display citations (page, section, table)
-- [ ] **Demo:** Show ADE extraction in action
-- [ ] **Evidence:** Include ADE JSON sample in submission
+- [x] Obtain LandingAI API key
+- [x] Implement document upload endpoint
+- [x] Integrate ADE API for extraction
+- [x] Parse ADE JSON output to entities
+- [x] Display citations (page, section, table)
+- [ ] **Demo:** Show ADE extraction in action (recording pending)
+- [ ] **Evidence:** Include ADE JSON sample in submission (export + appendix pending)
 
 ### 2. AWS Bedrock Integration
-- [ ] Obtain AWS credentials
-- [ ] Configure Bedrock for Claude 3 Sonnet
-- [ ] Implement chatbot endpoint
-- [ ] Create tool definitions (graph_query, doc_lookup, metric_compute)
-- [ ] Enable streaming responses
-- [ ] **Demo:** Show chatbot reasoning
-- [ ] **Evidence:** Include sample chatbot conversation
+- [x] Obtain AWS credentials
+- [x] Configure Bedrock for Claude 3.5 Sonnet + Haiku
+- [x] Implement chatbot endpoint
+- [x] Create tool definitions (graph_query, doc_lookup, metric_compute)
+- [x] Enable streaming responses
+- [ ] **Demo:** Show chatbot reasoning (final video pending)
+- [ ] **Evidence:** Include sample chatbot conversation (export transcript pending)
 
 ### 3. Working Prototype
-- [ ] Backend API functional (all endpoints)
-- [ ] Frontend UI functional (all components)
-- [ ] Graph visualization working
-- [ ] PDF evidence viewer working
-- [ ] **Demo:** Full end-to-end workflow
+- [x] Backend API functional (all endpoints)
+- [x] Frontend UI functional (all components)
+- [x] Graph visualization working
+- [x] PDF evidence viewer working
+- [ ] **Demo:** Full end-to-end workflow (live run-through + capture pending)
 
 ### 4. Documentation
-- [ ] README.md completed
-- [ ] API documentation completed
-- [ ] Architecture documentation completed
-- [ ] Pitch deck outline completed
-- [ ] Code comments and docstrings
+- [x] README.md completed
+- [x] API documentation completed
+- [x] Architecture documentation completed
+- [ ] Pitch deck outline completed (slides/outlines outstanding)
+- [x] Code comments and docstrings
 
 ---
 
 ## 🎯 Hackathon Scoring Criteria
 
 ### 1. Problem Clarity & Domain Relevance (15%)
-- [ ] Clear problem statement (financial document complexity)
-- [ ] Real-world use case demonstrated
-- [ ] Value proposition articulated
-- [ ] **Check:** Judges understand the pain point
+- [x] Clear problem statement (financial document complexity)
+- [x] Real-world use case demonstrated
+- [x] Value proposition articulated
+- [x] **Check:** Judges understand the pain point
 
 ### 2. Integration with LandingAI ADE (25%)
-- [ ] ADE API properly integrated
-- [ ] Deep post-processing of ADE output
-- [ ] ADE → Graph mapping visible
-- [ ] Citations preserved and displayed
-- [ ] **Evidence:** ADE JSON → graph transformation
+- [x] ADE API properly integrated
+- [x] Deep post-processing of ADE output
+- [x] ADE → Graph mapping visible
+- [x] Citations preserved and displayed
+- [ ] **Evidence:** ADE JSON → graph transformation (needs documented example)
 
 ### 3. Technical Sophistication (20%)
-- [ ] Multi-component architecture (LLM + Vector + Graph + UI)
-- [ ] Clean code, proper design patterns
-- [ ] Scalable architecture
-- [ ] Good use of tools/libraries
-- [ ] **Evidence:** Architecture diagram
+- [x] Multi-component architecture (LLM + Vector + Graph + UI)
+- [x] Clean code, proper design patterns
+- [x] Scalable architecture
+- [x] Good use of tools/libraries
+- [x] **Evidence:** Architecture diagram
 
 ### 4. Accuracy & Reliability (15%)
-- [ ] Results verified with citations
-- [ ] Numeric rule validation works
-- [ ] Evidence links work correctly
-- [ ] No crashes or errors in demo
-- [ ] **Evidence:** Sample risk detection report
+- [x] Results verified with citations
+- [x] Numeric rule validation works
+- [x] Evidence links work correctly
+- [x] No crashes or errors in demo (local tests stable)
+- [ ] **Evidence:** Sample risk detection report (needs documented output + screenshots)
 
 ### 5. Usability & UX (15%)
-- [ ] Clean, intuitive interface
-- [ ] Fast graph visualization
-- [ ] Simple chatbot interface
-- [ ] Responsive design
-- [ ] **Evidence:** Video walkthrough
+- [x] Clean, intuitive interface
+- [x] Fast graph visualization
+- [x] Simple chatbot interface
+- [ ] Responsive design (desktop-only today)
+- [ ] **Evidence:** Video walkthrough (recording pending)
 
 ### 6. Feasibility & Demo Quality (10%)
-- [ ] Runnable MVP
-- [ ] Local demo works smoothly
-- [ ] Clear path to production
-- [ ] Polished presentation
-- [ ] **Evidence:** Live demo or video
+- [x] Runnable MVP
+- [x] Local demo works smoothly
+- [x] Clear path to production
+- [ ] Polished presentation (pitch deck + practice outstanding)
+- [ ] **Evidence:** Live demo or video (not yet recorded)
 
 ---
 
 ## 📋 Pre-Submission Checklist
 
 ### Code
-- [ ] All code files checked in
-- [ ] No hardcoded API keys
-- [ ] Environment variables documented
-- [ ] Dependencies listed (requirements.txt, package.json)
-- [ ] Git repository cleaned up
+- [x] All code files checked in
+- [x] No hardcoded API keys
+- [x] Environment variables documented
+- [x] Dependencies listed (requirements.txt, package.json)
+- [x] Git repository cleaned up
 
 ### Demo
-- [ ] Sample documents prepared
-- [ ] Demo script practiced (3-4 minutes)
+- [x] Sample documents prepared
+- [ ] Demo script practiced (3-4 minutes) (needs rehearsal)
 - [ ] Backup recorded video (optional but recommended)
-- [ ] Technical setup tested (LandingAI + Bedrock)
-- [ ] Graph visualization tested
-- [ ] Chatbot tested with multiple queries
+- [x] Technical setup tested (LandingAI + Bedrock)
+- [x] Graph visualization tested
+- [x] Chatbot tested with multiple queries
 
 ### Documentation
-- [ ] README has all required sections
-- [ ] Installation instructions clear
-- [ ] Environment variables documented
-- [ ] Demo instructions included
-- [ ] API documentation complete
+- [x] README has all required sections
+- [x] Installation instructions clear
+- [x] Environment variables documented
+- [x] Demo instructions included
+- [x] API documentation complete
 
 ### Presentation
 - [ ] Pitch deck outline prepared
@@ -184,29 +184,27 @@ Financial AI Hackathon Championship 2025
 
 ## 🐛 Known Issues & Limitations
 
-*(Document any known bugs or incomplete features)*
-
-- [ ] Bug #1: ...
-- [ ] Bug #2: ...
-- [ ] Limitation #1: ...
-- [ ] Future Enhancement #1: ...
+- [ ] Quantitative accuracy metrics (precision/recall) not yet documented
+- [ ] Mobile responsiveness limited to desktop layout
+- [ ] Demo video and ADE evidence artifacts pending
+- [ ] Performance benchmarks (processing time per doc) not yet captured
 
 ---
 
 ## 📦 Submission Package
 
 ### Required Files
-- [ ] README.md
-- [ ] LICENSE
-- [ ] All source code
-- [ ] Documentation (docs/)
+- [x] README.md
+- [x] LICENSE
+- [x] All source code
+- [x] Documentation (docs/)
 - [ ] Pitch deck (docs/PITCH_DECK.md)
-- [ ] Docker Compose file
-- [ ] Environment setup instructions
+- [x] Docker Compose file
+- [x] Environment setup instructions
 
 ### Optional Files
 - [ ] Demo video (YouTube link)
-- [ ] Architecture diagram (images/)
+- [x] Architecture diagram (images/)
 - [ ] Sample ADE JSON output (examples/)
 - [ ] Presentation slides (PDF)
 
