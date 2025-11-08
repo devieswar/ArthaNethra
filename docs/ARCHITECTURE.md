@@ -14,41 +14,172 @@ ArthaNethra is a **hybrid AI financial investigation platform** that combines:
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Angular Frontend                         │
-│                                                                   │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐ │
-│  │  Document       │  │  Knowledge      │  │  Evidence       │ │
-│  │  Upload UI      │  │  Graph Viewer   │  │  Viewer         │ │
-│  │  (Dropzone)     │  │  (Sigma.js)     │  │  (ngx-pdf)      │ │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘ │
-│                                                                   │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐ │
-│  │  AI Chatbot     │  │  KPI Dashboard  │  │  Risk           │ │
-│  │  (Claude)       │  │  (ECharts)      │  │  Alert Panel    │ │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘ │
-└────────────────────┬────────────────────────────────────────────┘
-                     │ HTTP/REST API
-┌────────────────────▼────────────────────────────────────────────┐
-│                      FastAPI Backend                             │
-│                                                                   │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │                   API Gateway (main.py)                     │ │
-│  │  - /ingest   → Document upload & validation                 │ │
-│  │  - /extract  → LandingAI ADE extraction                     │ │
-│  │  - /normalize → Entity mapping & graph construction         │ │
-│  │  - /index    → Weaviate/Neo4j indexing                     │ │
-│  │  - /risk     → Rule-based risk detection                    │ │
-│  │  - /ask      → AI chatbot endpoint                         │ │
-│  │  - /evidence → PDF serving with highlights                 │ │
-│  └────────────────────────────────────────────────────────────┘ │
-└─────┬────────────────┬────────────────┬────────────────┬────────┘
-      │                │                │                │
-┌─────▼─────┐   ┌─────▼─────┐   ┌─────▼─────┐   ┌─────▼─────┐
-│LandingAI  │   │ Weaviate  │   │  Neo4j    │   │ AWS       │
-│   ADE     │   │  (Local)  │   │ (Optional)│   │ Bedrock   │
-│  API      │   │ Docker    │   │  Docker   │   │ (Cloud)   │
-└───────────┘   └───────────┘   └───────────┘   └───────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         Angular Frontend (Port 4200)                     │
+│                                                                           │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │              Unified Chat + Explorer Component                    │  │
+│  │  • Document Upload (Drag & Drop)                                  │  │
+│  │  • Interactive Graph Viewer (Sigma.js + 4 layouts)                │  │
+│  │  • Multi-document Chat Sessions (Streaming SSE)                   │  │
+│  │  • PDF Evidence Viewer (ngx-extended-pdf-viewer)                  │  │
+│  │  • Clickable Citations (Auto-attach + Jump to page)               │  │
+│  │  • AI Response Graphs (Fullscreen modal)                          │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+└───────────────────────────────┬─────────────────────────────────────────┘
+                                │ HTTP/REST + SSE
+┌───────────────────────────────▼─────────────────────────────────────────┐
+│                      FastAPI Backend (Port 8000)                         │
+│                                                                           │
+│  ┌────────────────────────────────────────────────────────────────────┐ │
+│  │                   API Gateway (main.py - 1576 lines)                │ │
+│  │                                                                      │ │
+│  │  POST /upload          → IngestionService                           │ │
+│  │     ↓ Save PDF to disk, create Document record                      │ │
+│  │                                                                      │ │
+│  │  POST /extract         → ExtractionService (325+ ADE refs)          │ │
+│  │     ↓ Step 1: _ade_parse() → LandingAI Parse API                   │ │
+│  │     ↓   PDF/DOCX → Markdown + Tables + Metadata                    │ │
+│  │     ↓ Step 2: _ade_extract() → LandingAI Extract API (optional)    │ │
+│  │     ↓   Markdown + Schema → Structured Entities                     │ │
+│  │     ↓ Step 3: Detect document type (invoice/contract/loan/other)   │ │
+│  │     ↓ Result: ade_output (markdown, tables, entities, citations)   │ │
+│  │                                                                      │ │
+│  │  POST /normalize       → NormalizationService                       │ │
+│  │     ↓ Step 1: Check ADE entities (if >= 20, use them)              │ │
+│  │     ↓ Step 2: If ADE < 20, fallback to specialized parsers:        │ │
+│  │     ↓   • InvoiceParser (extract line items, totals)               │ │
+│  │     ↓   • ContractParser (extract clauses, parties)                │ │
+│  │     ↓   • LoanParser (extract terms, covenants)                    │ │
+│  │     ↓   • Table Parser (extract financial metrics)                 │ │
+│  │     ↓ Step 3: If < 5 entities & doc > 10k chars:                   │ │
+│  │     ↓   → NarrativeParser (LLM chunks → entities + relationships)  │ │
+│  │     ↓ Step 4: Create relationships:                                 │ │
+│  │     ↓   • LLM-based (chunk analysis with Haiku)                    │ │
+│  │     ↓   • Heuristic (shared properties)                            │ │
+│  │     ↓ Result: entities[] + edges[]                                 │ │
+│  │                                                                      │ │
+│  │  POST /index           → IndexingService                            │ │
+│  │     ↓ Batch insert entities → Weaviate (vectors)                   │ │
+│  │     ↓ Batch insert entities + edges → Neo4j (graph)                │ │
+│  │     ↓ Result: searchable + queryable knowledge graph               │ │
+│  │                                                                      │ │
+│  │  POST /chat/sessions/{id}/messages → ChatbotService                │ │
+│  │     ↓ Step 1: MANDATORY document_search (Weaviate)                 │ │
+│  │     ↓   Filter by attached document_ids                             │ │
+│  │     ↓ Step 2: Optional graph_query (Neo4j)                         │ │
+│  │     ↓ Step 3: Optional metric_compute                              │ │
+│  │     ↓ Step 4: Claude 3.5 Sonnet reasoning                          │ │
+│  │     ↓ Step 5: Generate graph data (entities + relationships)       │ │
+│  │     ↓ Result: SSE stream (text + citations + graphData)            │ │
+│  │                                                                      │ │
+│  │  POST /risks/detect    → RiskDetectionService                      │ │
+│  │     ↓ Numeric rule validation + LLM anomaly detection              │ │
+│  └────────────────────────────────────────────────────────────────────┘ │
+│                                                                           │
+│  ┌────────────────────────────────────────────────────────────────────┐ │
+│  │                    17 Backend Services                              │ │
+│  │  • IngestionService        (upload, validation)                     │ │
+│  │  • ExtractionService       (ADE Parse + Extract, 325+ refs)         │ │
+│  │  • InvoiceParser           (line items, totals)                     │ │
+│  │  • ContractParser          (clauses, parties)                       │ │
+│  │  • LoanParser              (terms, rates, covenants)                │ │
+│  │  • NarrativeParser         (LLM chunked extraction - Haiku)         │ │
+│  │  • MarkdownParser          (table extraction)                       │ │
+│  │  • DocumentTypeDetector    (auto-routing logic)                     │ │
+│  │  • NormalizationService    (ADE → entities + edges)                 │ │
+│  │  • RelationshipDetector    (LLM + heuristic)                        │ │
+│  │  • IndexingService         (Weaviate + Neo4j batching)              │ │
+│  │  • RiskDetectionService    (rules + LLM)                            │ │
+│  │  • ChatbotService          (multi-tool, streaming)                  │ │
+│  │  • AnalyticsService        (metric calculations)                    │ │
+│  │  • PersistenceService      (sessions, messages)                     │ │
+│  └────────────────────────────────────────────────────────────────────┘ │
+└─────┬────────────┬────────────┬────────────┬────────────┬──────────────┘
+      │            │            │            │            │
+      ▼            ▼            ▼            ▼            ▼
+┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
+│LandingAI │  │ Weaviate │  │  Neo4j   │  │   AWS    │  │  Local   │
+│   ADE    │  │ (Docker) │  │ (Docker) │  │ Bedrock  │  │   Disk   │
+│   API    │  │  Port    │  │  Ports   │  │ (Cloud)  │  │  (PDFs,  │
+│          │  │  8080    │  │7474,7687 │  │          │  │  Cache)  │
+│          │  │          │  │          │  │          │  │          │
+│ • Parse  │  │ • Vector │  │ • Cypher │  │ • Sonnet │  │ • uploads│
+│   (PDF→  │  │   Search │  │   Queries│  │   (Chat) │  │ • ade_   │
+│   MD)    │  │ • Embed- │  │ • Graph  │  │ • Haiku  │  │   cache  │
+│ • Extract│  │   dings  │  │   Algos  │  │   (Bulk) │  │ • session│
+│   (MD+   │  │ • Chunks │  │ • 38 Edge│  │ • Tool   │  │   data   │
+│   Schema)│  │          │  │   Types  │  │   Calling│  │          │
+└──────────┘  └──────────┘  └──────────┘  └──────────┘  └──────────┘
+
+═══════════════════════════════════════════════════════════════════════
+
+                        DOCUMENT PROCESSING FLOW
+
+User uploads PDF → /upload
+    ↓
+IngestionService: Save to disk, validate
+    ↓
+/extract → ExtractionService
+    ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│ STEP 1: LandingAI ADE Parse API                                     │
+│   • POST https://api.landing.ai/v1/tools/ade/parse                  │
+│   • Input: PDF bytes + filename                                     │
+│   • Output: { markdown, tables[], metadata }                        │
+│   • Timeout: 8 minutes                                              │
+└─────────────────────────────────────────────────────────────────────┘
+    ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│ STEP 2: LandingAI ADE Extract API (Optional)                        │
+│   • POST https://api.landing.ai/v1/tools/ade/extract                │
+│   • Input: { markdown, schema }                                     │
+│   • Output: { entities[], key_values[], confidence }                │
+│   • Fallback: Skip if schema extraction fails                       │
+└─────────────────────────────────────────────────────────────────────┘
+    ↓
+Document.ade_output = { markdown, tables, entities, metadata }
+    ↓
+/normalize → NormalizationService
+    ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│ IF ADE entities >= 20: Use ADE entities (good quality)              │
+│ ELSE:                                                                │
+│   ├─ Detect document type (invoice/contract/loan/narrative)         │
+│   └─ Route to specialized parser:                                   │
+│       • InvoiceParser → line items, vendor, totals                  │
+│       • ContractParser → parties, clauses, terms                    │
+│       • LoanParser → borrower, lender, rate, covenants              │
+│       • Table Parser → financial metrics from tables                │
+│                                                                      │
+│ IF entities < 5 AND markdown > 10,000 chars:                        │
+│   └─ NarrativeParser:                                               │
+│       1. Chunk markdown by paragraphs (5000 char chunks)            │
+│       2. For each chunk: LLM (Haiku) → entities + relationships     │
+│       3. Deduplicate entities across chunks                         │
+└─────────────────────────────────────────────────────────────────────┘
+    ↓
+entities[] (12 types: Company, Loan, Person, Location, etc.)
+    ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│ Create Relationships (edges[])                                       │
+│   • LLM-based: Chunk entities → Haiku → relationships               │
+│   • Heuristic: Shared properties → inferred relationships           │
+│   • 38 edge types: HAS_LOAN, OWNS, INVESTED_IN, etc.                │
+└─────────────────────────────────────────────────────────────────────┘
+    ↓
+/index → IndexingService
+    ↓
+┌───────────────────────┐  ┌───────────────────────┐
+│ Weaviate (Vectors)    │  │ Neo4j (Graph)         │
+│ • Batch insert 100/tx │  │ • Batch insert 100/tx │
+│ • Generate embeddings │  │ • Create nodes + rels │
+│ • Enable semantic     │  │ • Enable Cypher       │
+│   search              │  │   queries             │
+└───────────────────────┘  └───────────────────────┘
+    ↓
+Document status: COMPLETED
+Knowledge graph ready for chat!
 ```
 
 ---
@@ -67,11 +198,13 @@ ArthaNethra is a **hybrid AI financial investigation platform** that combines:
   - Interactive node-edge visualization
   - Zoom, pan, highlight
   - Real-time filter controls
+  - Supports extended relationship vocabulary (ACQUIRED, INVESTED_IN, PARTNERS_WITH, etc.)
 
 - **ChatbotComponent** (Angular Material)
   - Streaming responses from Claude
   - Message history
   - Citation buttons ("Open Graph", "Open Source")
+  - Citation pills auto-attach the referenced document to the active chat and open it in the explorer
 
 - **EvidenceViewerComponent** (ngx-extended-pdf-viewer)
   - PDF rendering with highlights
@@ -148,6 +281,10 @@ async def chat_bot(message: str, context: dict) -> StreamingResponse:
     Returns: Streaming text + citations
     """
 ```
+
+- Enforces a mandatory `document_search` tool call at the start of every interaction to gather evidence.
+- Filters search results to documents attached to the active chat session.
+- Automatically attaches a cited document to the chat session when the user clicks a citation pill so the explorer can open it instantly.
 
 ##### `/evidence` (GET)
 ```python

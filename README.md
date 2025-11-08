@@ -34,82 +34,113 @@ Create an **AI-powered financial investigation agent** that can:
 
 ## 🧩 Core Features
 
-### 🗂️ 1. Smart Document Ingestion (ADE Integration)
-* Upload financial PDFs or ZIPs (SEC filings, invoices, contracts)
-* LandingAI **ADE API** extracts: key-value pairs, tables, sections, clauses, and metadata
-* Outputs **structured JSON** with **citations** (page, cell, clause)
+### 🗂️ 1. Intelligent Document Processing
+* **Hybrid Extraction Pipeline**: LandingAI ADE for structured data (tables, invoices) + LLM-based narrative parsing for unstructured text
+* **Multi-Format Support**: 10-Ks, loan agreements, contracts, invoices, balance sheets
+* **Adaptive Processing**: Automatic document type detection routes to specialized parsers
+* **Rich Citations**: Every extracted entity preserves page, section, table, and cell-level provenance
 
-### 🧱 2. Entity Graph Construction
-* ADE output normalized into entities: `Company`, `Subsidiary`, `Instrument`, `Invoice`, `Clause`, `Metric`
-* Stored in **Weaviate (local)** with embeddings + cross-refs
-* Optional **Neo4j integration** for advanced Cypher analytics
+### 🧱 2. Dynamic Knowledge Graph Construction
+* **Deep Entity Normalization**: 12+ entity types (Company, Subsidiary, Loan, Invoice, Clause, Metric, Location, Person, etc.)
+* **38+ Relationship Types**: Complex financial relationships (HAS_LOAN, OWNS, SUBSIDIARY_OF, INVESTED_IN, REGULATED_BY, etc.)
+* **Dual-Mode Relationship Detection**:
+  - **LLM-Based**: Entities & relationships extracted directly from narrative text chunks (faster, cheaper with Claude Haiku)
+  - **Heuristic**: Property-based relationship inference (e.g., shared addresses, ownership patterns)
+* **Multi-Database Architecture**: Weaviate (semantic vectors) + Neo4j (graph traversal) + In-memory (fast queries)
 
-### 🌐 3. Financial Graph Visualization (Sigma.js)
-* Interactive network of relationships: "ACME → HAS_LOAN → Bank of America"
-* Dynamic filters for entity types, thresholds, and risk factors
-* Real-time highlighting from chatbot commands
+### 🌐 3. Advanced Graph Visualization
+* **Interactive Exploration**: Sigma.js with real-time zoom, pan, hover, and drag
+* **Multiple Layout Algorithms**: Force-directed, circular, grid, random (switchable on-the-fly)
+* **Response Graphs**: AI-generated subgraphs visualized in fullscreen modals
+* **Entity Filtering**: Dynamic filters by type, property thresholds, and risk level
 
-### 💬 4. Tool-Augmented Chatbot (Claude 3 on Bedrock)
-* Natural-language interface for analysts
-* Example queries: "Show subsidiaries with >8% variable-rate debt"
-* Backend tools: `graph_query()`, `doc_lookup()`, `metric_compute()`
-* Returns findings, subgraphs, and citations with "Open Graph" and "Open Source" buttons
+### 💬 4. Context-Aware AI Chatbot
+* **Multi-Document Sessions**: Chat with multiple documents simultaneously
+* **Mandatory Document Search**: Every query triggers Weaviate semantic search for grounded responses
+* **Tool-Augmented Reasoning**: 
+  - `document_search()`: Semantic chunk retrieval (automatically filtered by attached docs)
+  - `graph_query()`: Entity/relationship graph traversal
+  - `metric_compute()`: Financial calculations and aggregations
+* **Clickable Citations**: Source pills auto-attach and open documents in explorer
+* **Graph Visualization Buttons**: "View Graph" pills show AI-mentioned entities in interactive modal
+* **Streaming Responses**: Real-time SSE streaming with Claude 3.5 Sonnet
 
-### 📊 5. KPI & Trend Dashboards (ECharts + AG Grid)
-* Displays: profit/loss trends, debt ratios, exposure distribution
-* Built-in filters for period, entity type, or metric name
+### 📊 5. Financial Analytics Dashboard
+* **Unified Chat + Explorer Interface**: Single-page app combining chat, document list, graph viewer, and PDF evidence
+* **Document Management**: Search, filter, attach/detach documents to chat sessions
+* **Session Persistence**: Named chat sessions with full message history and document context
+* **Inline Editing**: Rename sessions, delete with confirmation, manage multiple conversations
 
-### 📑 6. Evidence Viewer (ngx-extended-pdf-viewer)
-* View ADE-sourced PDFs with highlights
-* Click any citation → jump to exact page/section
-* Powered by pre-signed local URLs for offline demo
+### 📑 6. Evidence Viewer with Auto-Navigation
+* **ngx-extended-pdf-viewer**: Full-featured PDF viewer with zoom, search, download
+* **Citation-Driven Navigation**: Click source pills → document auto-opens in explorer at exact page
+* **Auto-Attachment**: Clicking citations for unattached documents automatically adds them to session
 
-### ⚙️ 7. Local-first Architecture
-* All components run locally for speed and stability
-* Angular (frontend) + FastAPI (backend) + Weaviate (vectors)
-* Minimal reliance on cloud beyond ADE and Bedrock APIs
+### ⚙️ 7. Production-Ready Architecture
+* **Dockerized Stack**: One-command deployment (frontend + backend + Weaviate + Neo4j)
+* **Async Everything**: FastAPI with full async/await for I/O-bound operations
+* **Caching**: ADE results cached by document hash, reducing API costs
+* **Error Resilience**: Exponential backoff, fallback models, graceful degradation
 
-### 🧾 8. Risk Detection Engine (Rules + Reasoning)
-* Hybrid approach: LLM identifies anomalies + Python rule engine checks thresholds
-* Example rules: Variable-rate > 8% → flag "Interest Rate Risk"
+### 🧾 8. Multi-Strategy Risk Detection
+* **Hybrid Risk Engine**: 
+  - Numeric rule validation (thresholds, ratios)
+  - LLM-based anomaly detection
+  - Cross-document pattern matching
+* **Risk Severity Classification**: HIGH/MEDIUM/LOW with actionable recommendations
+* **Citation-Backed Findings**: Every risk links to source evidence
 
-### 🔍 9. Explainability & Traceability
-* Every result has clickable evidence
-* Chatbot provides reasoning chain and numeric breakdown
+### 🔍 9. Explainability & Provenance
+* **Full Traceability**: Document → ADE JSON → Entities → Graph → Chatbot response
+* **Chain-of-Thought**: AI explains reasoning steps before answering
+* **Evidence-First**: Only answers from attached documents; refuses general knowledge queries
 
-### 🧩 10. Modular Microservice Design
-* FastAPI microservices: `/ingest`, `/extract`, `/normalize`, `/index`, `/risk`, `/ask`, `/evidence`
+### 🧩 10. Modular Service Architecture
+* **17 Backend Services**: Ingestion, extraction (ADE + narrative), normalization, indexing, risk detection, chatbot, analytics, persistence
+* **Specialized Parsers**: Invoice, contract, loan, narrative (each optimized for document type)
+* **Clean Separation**: Models, services, endpoints cleanly separated with Pydantic validation
 
 ---
 
 ## 💡 Innovation Highlights
 
-| Area                       | Innovation                    | Description                                                |
-| -------------------------- | ----------------------------- | ---------------------------------------------------------- |
-| **ADE Integration**        | Deep ADE JSON post-processing | Converts raw extraction into graph entities and citations  |
-| **Financial Graph AI**     | Hybrid LLM + vector + graph   | Combines semantic understanding + relational reasoning     |
-| **Explainable AI**         | Traceable evidence            | Every LLM claim backed by ADE-sourced page/cell            |
-| **Local-first Design**     | Fully runnable demo           | Works offline, fast iterations, reproducible               |
-| **Tool-Augmented Chatbot** | Actionable dialogue           | Chatbot triggers graph, evidence, metrics programmatically |
-| **Cross-Domain Utility**   | Real finance workflows        | Loan risk, audit trail, compliance check, variance reports |
+| Area                          | Innovation                                  | Description                                                                          |
+| ----------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------ |
+| **Hybrid Extraction**         | ADE + LLM narrative parsing                 | Structured data via ADE, unstructured narrative via chunked LLM analysis             |
+| **Dual-Model Strategy**       | Sonnet (reasoning) + Haiku (extraction)     | Cost-optimized: expensive model for chat, cheap model for bulk entity extraction     |
+| **Automatic Document Routing** | Type detection → specialized parser        | Invoices, contracts, loans, narratives each get domain-optimized processing          |
+| **Grounded AI**               | Mandatory document search                   | AI **must** search Weaviate before responding; refuses non-cited answers             |
+| **Interactive Citations**     | Click → auto-attach → open PDF             | Source pills automatically attach documents and jump to exact evidence page          |
+| **Live Graph Generation**     | AI-generated subgraphs                      | Chat responses include structured graph data visualized in draggable modal           |
+| **Multi-Layout Graphs**       | Switchable algorithms                       | Force-directed, circular, grid layouts toggled in real-time without re-render        |
+| **Session-Based Context**     | Multi-document chat sessions                | Attach/detach docs, maintain conversation history, named sessions with persistence   |
+| **Provenance Preservation**   | End-to-end citation tracking                | Document → ADE → Entity → Graph → Chat response → Evidence viewer (full traceability) |
 
 ---
 
 ## 🏗️ Tech Stack
 
-| Layer              | Tech                          | Purpose                               |
-| ------------------ | ----------------------------- | ------------------------------------- |
-| **Frontend**       | Angular 19 + Tailwind         | Modern responsive UI                  |
-| **Graph**          | Sigma.js + Graphology         | Real-time visualization               |
-| **Charts**         | ECharts + AG Grid             | KPIs, trends, analytics               |
-| **PDFs**           | ngx-extended-pdf-viewer       | Source evidence                       |
-| **Backend**        | FastAPI + Python              | Microservice orchestrator             |
-| **AI / LLM**       | AWS Bedrock (Claude 3 Sonnet) | Reasoning + explanations              |
-| **Extraction**     | LandingAI ADE                 | Document parsing (mandatory)          |
-| **Vector DB**      | Weaviate (Docker local)       | Semantic retrieval & graph cross-refs |
-| **Graph DB (opt)** | Neo4j (local)                 | Complex relations, Cypher queries     |
-| **Storage**        | Local filesystem              | PDFs, ADE JSON                        |
-| **DevOps**         | Docker Compose                | Self-contained demo environment       |
+| Layer                  | Tech                                      | Purpose                                     |
+| ---------------------- | ----------------------------------------- | ------------------------------------------- |
+| **Frontend**           | Angular 19 + Tailwind CSS                 | Modern responsive single-page app           |
+| **Graph Visualization**| Sigma.js v3 + Graphology + Layout Algos   | Interactive, draggable graphs with layouts  |
+| **Markdown Rendering** | MarkdownIt                                | Rich text formatting in chat                |
+| **PDF Viewer**         | ngx-extended-pdf-viewer                   | Full-featured PDF with citations            |
+| **Backend**            | FastAPI + Uvicorn + Python 3.11           | High-performance async API                  |
+| **AI Models**          | AWS Bedrock (Claude 3.5 Sonnet + Haiku)   | Reasoning (Sonnet) + bulk extraction (Haiku)|
+| **Document Extraction**| LandingAI ADE                             | Structured data extraction (tables, KV)     |
+| **Narrative Parsing**  | Custom LLM chunking (Haiku)               | Entity + relationship extraction from prose |
+| **Vector DB**          | Weaviate (Docker)                         | Semantic search, embeddings                 |
+| **Graph DB**           | Neo4j (Docker)                            | Complex graph queries, Cypher               |
+| **Storage**            | Local filesystem                          | Documents, ADE cache, session data          |
+| **Logging**            | Loguru                                    | Structured logs with rotation               |
+| **DevOps**             | Docker Compose + Makefile                 | One-command deployment and management       |
+
+---
+
+## 🗺️ Architecture Diagram
+
+![ArthaNethra System Architecture](docs/ArthaNethra%20Arc%20Diagram.jpg)
 
 ---
 
@@ -170,50 +201,60 @@ make format
 
 ```
 ArthaNethra/
-├── backend/              # FastAPI backend
-│   ├── services/         # Business logic services
-│   │   ├── ingestion.py        # Document upload
-│   │   ├── extraction.py       # LandingAI ADE integration
-│   │   ├── normalization.py    # Graph construction
-│   │   ├── indexing.py         # Weaviate/Neo4j indexing
-│   │   ├── risk_detection.py   # Risk analysis
-│   │   └── chatbot.py          # AWS Bedrock chatbot
-│   ├── models/           # Data models
-│   │   ├── document.py
-│   │   ├── entity.py
-│   │   ├── edge.py
-│   │   ├── risk.py
-│   │   └── citation.py
-│   ├── config.py         # Configuration
-│   ├── main.py           # FastAPI application
-│   ├── requirements.txt  # Python dependencies
+├── backend/                      # FastAPI backend
+│   ├── services/                 # 17 Business logic services
+│   │   ├── ingestion.py          # Document upload & validation
+│   │   ├── extraction.py         # LandingAI ADE API integration
+│   │   ├── invoice_parser.py     # Specialized invoice extraction
+│   │   ├── contract_parser.py    # Contract clause extraction
+│   │   ├── loan_parser.py        # Loan agreement parsing
+│   │   ├── narrative_parser.py   # LLM-based narrative extraction (NEW)
+│   │   ├── markdown_parser.py    # Markdown table parsing
+│   │   ├── markdown_analyzer.py  # Schema detection from markdown
+│   │   ├── document_type_detector.py # Auto-routing logic
+│   │   ├── normalization.py      # ADE → Entity normalization
+│   │   ├── relationship_detector.py # LLM + heuristic relationship finder
+│   │   ├── indexing.py           # Weaviate + Neo4j indexing
+│   │   ├── risk_detection.py     # Hybrid risk engine
+│   │   ├── chatbot.py            # Multi-tool chatbot with SSE streaming
+│   │   ├── analytics.py          # Metric calculations
+│   │   └── persistence.py        # Session & document management
+│   ├── models/                   # Pydantic data models
+│   │   ├── document.py           # Document metadata
+│   │   ├── entity.py             # 12 entity types
+│   │   ├── edge.py               # 38 relationship types
+│   │   ├── risk.py               # Risk findings
+│   │   ├── citation.py           # Source provenance
+│   │   └── chat_session.py       # Chat session model
+│   ├── config.py                 # Environment config
+│   ├── main.py                   # FastAPI app (1576 lines)
+│   ├── requirements.txt          # 30+ dependencies
 │   └── Dockerfile
-├── frontend/             # Angular frontend
+├── frontend/                     # Angular 19 frontend
 │   ├── src/
 │   │   ├── app/
-│   │   │   ├── components/     # UI components
-│   │   │   │   ├── dashboard/
-│   │   │   │   ├── upload/
-│   │   │   │   ├── graph/
-│   │   │   │   ├── chat/
-│   │   │   │   └── risks/
-│   │   │   ├── services/       # API services
-│   │   │   ├── models/         # TypeScript models
+│   │   │   ├── components/
+│   │   │   │   └── chat-unified/  # Unified chat + explorer UI
+│   │   │   │       ├── chat-unified.component.ts    (1529 lines)
+│   │   │   │       ├── chat-unified.component.html  (1080 lines)
+│   │   │   │       └── chat-unified.component.css
+│   │   │   ├── services/
+│   │   │   │   └── api.service.ts  # HTTP client for backend
+│   │   │   ├── models/             # TypeScript interfaces
 │   │   │   └── app.component.ts
-│   │   ├── environments/
+│   │   ├── types/
+│   │   │   └── markdown-it.d.ts    # Custom type definitions
 │   │   └── styles.scss
-│   ├── package.json      # Node dependencies
-│   ├── angular.json
+│   ├── package.json               # 20+ npm packages
 │   ├── tailwind.config.js
 │   └── Dockerfile
-├── docs/                 # Documentation
-│   ├── ARCHITECTURE.md   # Technical architecture
-│   ├── API.md            # API documentation
-│   └── PROJECT_OVERVIEW.md
-├── docker-compose.yml    # Docker orchestration
-├── env.example           # Environment template
-├── docs/GETTING_STARTED.md    # Setup guide
-├── docs/HACKATHON_CHECKLIST.md
+├── docs/                          # Comprehensive documentation
+│   ├── ARCHITECTURE.md            # System architecture (480 lines)
+│   ├── HACKATHON_CHECKLIST.md     # Submission checklist
+│   ├── JUDGE_EVALUATION.md        # Self-evaluation (NEW)
+│   └── SAMPLE_QUESTIONS.md        # 98 test queries (NEW)
+├── docker-compose.yml             # Full stack orchestration
+├── Makefile                       # Dev shortcuts
 ├── LICENSE
 └── README.md
 ```
@@ -231,12 +272,53 @@ ArthaNethra/
 
 ---
 
+## 🚀 Current Status & Metrics
+
+### ✅ Implemented Features
+- ✅ Full document processing pipeline (ADE + narrative extraction)
+- ✅ 38 relationship types, 12 entity types
+- ✅ Multi-document chat sessions with persistence
+- ✅ Clickable citations with auto-attach
+- ✅ AI-generated response graphs
+- ✅ Multiple graph layout algorithms
+- ✅ Mandatory document search for grounded responses
+- ✅ Dual-model strategy (Sonnet + Haiku) for cost optimization
+- ✅ Hybrid relationship detection (LLM + heuristics)
+- ✅ Docker Compose deployment
+
+### 📊 Code Metrics
+- **Backend**: 1,576 lines (main.py) + 17 services
+- **Frontend**: 1,529 lines (chat component) + 1,080 lines (template)
+- **Documentation**: 4 comprehensive docs (2,000+ lines)
+- **Test Coverage**: 98 sample questions for demos
+
+### 🔧 Known Limitations
+- No multi-tenant support yet (single-user deployment)
+- ADE requires API key (not bundled)
+- No mobile-optimized UI
+- Session data stored locally (not cloud-synced)
+
 ## 🧩 Future Extensions
 
-* Deploy to AWS ECS with real S3 + Bedrock integration
-* Add **document QA fine-tuning** for ADE schemas
-* Integrate **neo4j-graph-algo** for exposure concentration
-* Add **multi-user dashboards + audit trail**
+### Near-term (30 days)
+- [ ] Add export functionality (PDF reports, CSV data)
+- [ ] Mobile-responsive UI
+- [ ] Performance metrics dashboard (processing time, accuracy)
+- [ ] Bulk document operations
+
+### Mid-term (90 days)
+- [ ] Multi-tenant architecture with RBAC
+- [ ] Deploy to AWS ECS with S3 storage
+- [ ] User authentication & audit trail
+- [ ] Custom ADE schema training
+- [ ] Integration with Slack, Excel, Bloomberg Terminal
+
+### Long-term (6+ months)
+- [ ] ML-based risk scoring (supervised learning)
+- [ ] Advanced graph algorithms (PageRank, community detection)
+- [ ] Document versioning for temporal analysis
+- [ ] Real-time collaboration via WebSocket
+- [ ] Fine-tuned domain-specific models
 
 ---
 

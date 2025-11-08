@@ -523,9 +523,12 @@
             <div class="flex items-center justify-between mb-2">
               <div class="text-xs text-gray-500">Rendered Markdown</div>
               <button (click)="openMarkdownFullscreen()"
-                      class="px-2 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-100"
+                      class="p-2 rounded border border-gray-300 text-gray-600 hover:bg-gray-100"
                       title="Open fullscreen">
-                Expand
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"></path>
+                </svg>
               </button>
             </div>
 
@@ -625,20 +628,31 @@
                 <h4 class="font-semibold text-gray-900">{{ selectedDocument?.filename }}</h4>
                 <p class="text-sm text-gray-500">Original Document</p>
               </div>
-              <a [href]="'http://localhost:8000/api/v1/documents/' + selectedDocument?.id + '/pdf'" 
-                 target="_blank"
-                 class="px-3 py-1 text-xs bg-primary-600 text-white rounded hover:bg-primary-700 flex items-center gap-1">
-                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
-                </svg>
-                Open in Tab
-              </a>
+              <div class="flex items-center gap-2">
+                <button (click)="openPdfFullscreen()"
+                        class="p-2 border border-gray-300 text-gray-600 rounded hover:bg-gray-100"
+                        title="Open fullscreen">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"></path>
+                  </svg>
+                </button>
+                <a *ngIf="selectedDocument?.id as docId"
+                   [href]="'http://localhost:8000/api/v1/documents/' + docId + '/pdf'" 
+                   target="_blank"
+                   class="px-3 py-1 text-xs bg-primary-600 text-white rounded hover:bg-primary-700 flex items-center gap-1">
+                  <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+                  </svg>
+                  Open in Tab
+                </a>
+              </div>
             </div>
             
-            <div class="flex-1 bg-gray-100 rounded-lg overflow-hidden">
+            <div *ngIf="!isPdfFullscreen" class="flex-1 bg-gray-100 rounded-lg overflow-hidden">
               <ngx-extended-pdf-viewer
-                *ngIf="selectedDocument && selectedDocument.id"
-                [src]="'http://localhost:8000/api/v1/documents/' + selectedDocument.id + '/pdf'"
+                *ngIf="selectedDocument?.id as docId"
+                [src]="'http://localhost:8000/api/v1/documents/' + docId + '/pdf'"
                 [height]="'100%'"
                 [showToolbar]="true"
                 [showSidebarButton]="true"
@@ -935,6 +949,62 @@
 
         <div class="flex-1 overflow-y-auto bg-gray-50 p-6">
           <div class="prose prose-sm md:prose lg:prose-lg max-w-none" [innerHTML]="markdownHtml"></div>
+        </div>
+      </div>
+
+      <!-- Fullscreen PDF Modal -->
+      <div *ngIf="isPdfFullscreen"
+           class="fixed inset-0 z-50 bg-white flex flex-col">
+        <div class="flex items-center justify-between p-4 border-b border-gray-200">
+          <div>
+            <h3 class="text-lg font-semibold text-gray-900">{{ selectedDocument?.filename }}</h3>
+            <p class="text-sm text-gray-500">Original Document</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <a *ngIf="selectedDocument?.id as docId"
+               [href]="'http://localhost:8000/api/v1/documents/' + docId + '/pdf'" 
+               target="_blank"
+               class="px-3 py-1 text-xs bg-primary-600 text-white rounded hover:bg-primary-700 flex items-center gap-1">
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+              </svg>
+              Open in Tab
+            </a>
+            <button (click)="closePdfFullscreen()"
+                    class="p-2 rounded-full hover:bg-gray-100"
+                    title="Close fullscreen">
+              <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                      d="M6 18L18 6M6 6l12 12"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="flex-1 bg-gray-100">
+          <ngx-extended-pdf-viewer
+            *ngIf="selectedDocument?.id as docId"
+            [src]="'http://localhost:8000/api/v1/documents/' + docId + '/pdf'"
+            [height]="'100%'"
+            [showToolbar]="true"
+            [showSidebarButton]="true"
+            [showFindButton]="true"
+            [showPagingButtons]="true"
+            [showZoomButtons]="true"
+            [showPresentationModeButton]="false"
+            [showOpenFileButton]="false"
+            [showPrintButton]="true"
+            [showDownloadButton]="true"
+            [showSecondaryToolbarButton]="true"
+            [showRotateButton]="false"
+            [showHandToolButton]="true"
+            [showScrollingButton]="true"
+            [showSpreadButton]="true"
+            [showPropertiesButton]="true"
+            [textLayer]="true"
+            [zoom]="'auto'"
+            backgroundColor="#f3f4f6">
+          </ngx-extended-pdf-viewer>
         </div>
       </div>
 
