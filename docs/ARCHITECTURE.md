@@ -6,6 +6,7 @@ ArthaNethra is a **hybrid AI financial investigation platform** that combines:
 - **LandingAI's Agentic Document Extraction (ADE)** for structured data extraction
 - **AWS Bedrock (Claude 3)** for reasoning and explanations
 - **Vector databases (Weaviate)** for semantic search
+- **Sentence-transformers inference (all-mpnet-base-v2)** for local embedding generation
 - **Graph analytics** for relationship traversal
 - **Angular frontend** for interactive visualization
 
@@ -94,23 +95,24 @@ ArthaNethra is a **hybrid AI financial investigation platform** that combines:
 │  │  • ChatbotService          (multi-tool, streaming)                  │ │
 │  │  • AnalyticsService        (metric calculations)                    │ │
 │  │  • PersistenceService      (sessions, messages)                     │ │
+│  │  • EmbeddingService        (MPNet embeddings via transformers-inference)│ │
 │  └────────────────────────────────────────────────────────────────────┘ │
-└─────┬────────────┬────────────┬────────────┬────────────┬──────────────┘
-      │            │            │            │            │
-      ▼            ▼            ▼            ▼            ▼
-┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
-│LandingAI │  │ Weaviate │  │  Neo4j   │  │   AWS    │  │  Local   │
-│   ADE    │  │ (Docker) │  │ (Docker) │  │ Bedrock  │  │   Disk   │
-│   API    │  │  Port    │  │  Ports   │  │ (Cloud)  │  │  (PDFs,  │
-│          │  │  8080    │  │7474,7687 │  │          │  │  Cache)  │
-│          │  │          │  │          │  │          │  │          │
-│ • Parse  │  │ • Vector │  │ • Cypher │  │ • Sonnet │  │ • uploads│
-│   (PDF→  │  │   Search │  │   Queries│  │   (Chat) │  │ • ade_   │
-│   MD)    │  │ • Embed- │  │ • Graph  │  │ • Haiku  │  │   cache  │
-│ • Extract│  │   dings  │  │   Algos  │  │   (Bulk) │  │ • session│
-│   (MD+   │  │ • Chunks │  │ • 38 Edge│  │ • Tool   │  │   data   │
-│   Schema)│  │          │  │   Types  │  │   Calling│  │          │
-└──────────┘  └──────────┘  └──────────┘  └──────────┘  └──────────┘
+└─────┬────────────┬────────────┬────────────┬────────────┬────────────┬──────────────┘
+      │            │            │            │            │            │
+      ▼            ▼            ▼            ▼            ▼            ▼
+┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────┐
+│LandingAI │  │ Weaviate │  │  Neo4j   │  │ Transformers │  │   AWS    │  │  Local   │
+│   ADE    │  │ (Docker) │  │ (Docker) │  │ Inference    │  │ Bedrock  │  │   Disk   │
+│   API    │  │  Port    │  │  Ports   │  │ (all-mpnet-  │  │ (Cloud)  │  │  (PDFs,  │
+│          │  │  8080    │  │7474,7687 │  │ base-v2)     │  │          │  │  Cache)  │
+│          │  │          │  │          │  │  Port 8081   │  │          │  │          │
+│ • Parse  │  │ • Vector │  │ • Cypher │  │ • Embedding  │  │ • Sonnet │  │ • uploads│
+│   (PDF→  │  │   Search │  │   Queries│  │   service    │  │   (Chat) │  │ • ade_   │
+│   MD)    │  │ • Embed- │  │ • Graph  │  │ • Serves     │  │ • Haiku  │  │   cache  │
+│ • Extract│  │   dings  │  │   Algos  │  │   sentence   │  │   (Bulk) │  │ • session│
+│   (MD+   │  │ • Chunks │  │ • 38 Edge│  │   transformer│  │ • Tool   │  │   data   │
+│   Schema)│  │          │  │   Types  │  │   embeddings │  │   Calling│  │          │
+└──────────┘  └──────────┘  └──────────┘  └──────────────┘  └──────────┘  └──────────┘
 
 ═══════════════════════════════════════════════════════════════════════
 
@@ -294,6 +296,11 @@ async def serve_pdf(document_id: str, page: int) -> FileResponse:
     Returns: PDF byte stream
     """
 ```
+
+- **Transformers Inference Service (all-mpnet-base-v2)**  
+  - Runs as a Docker sidecar (`semitechnologies/transformers-inference`)  
+  - Exposes sentence-transformer embeddings on port 8081  
+  - Weaviate calls it to embed document chunks and chat messages
 
 ---
 
