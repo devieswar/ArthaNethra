@@ -4,6 +4,9 @@ import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml, SafeResourceUrl } from '@angular/platform-browser';
 import { EChartsOption } from 'echarts';
 import Graph from 'graphology';
+import forceAtlas2 from 'graphology-layout-forceatlas2';
+import circular from 'graphology-layout/circular';
+import random from 'graphology-layout/random';
 import MarkdownIt from 'markdown-it';
 import { NgxEchartsModule } from 'ngx-echarts';
 import { NgxExtendedPdfViewerModule } from 'ngx-extended-pdf-viewer';
@@ -82,6 +85,9 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
   private graphInstance: any = null;
   private responseSigmaInstance: Sigma | null = null;
   private responseGraphInstance: any = null;
+  currentLayout: 'force' | 'circular' | 'grid' | 'random' = 'force'; // Default layout
+  responseGraphLayout: 'force' | 'circular' | 'grid' | 'random' = 'circular'; // Layout for response graph
+  layoutOptions: ('force' | 'circular' | 'grid' | 'random')[] = ['force', 'circular', 'grid', 'random'];
   
   allDocuments: Document[] = [];
   currentDocuments: Document[] = [];
@@ -181,24 +187,34 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
     });
   }
   
-  openDocumentFromCitation(docId: string) {
+  async openDocumentFromCitation(docId: string) {
     console.log('Available documents:', this.allDocuments.map(d => ({ id: d.id, filename: d.filename })));
     
-    // Find the document by ID
-    const document = this.allDocuments.find(doc => doc.id === docId);
+    let document = this.allDocuments.find(doc => doc.id === docId);
     
-    if (document) {
-      // Ensure explorer is visible
-      this.showExplorer = true;
-      
-      // Open the document in the explorer view (PDF view by default)
-      this.viewDocumentPDF(document);
-      
-      console.log('✅ Opening document from citation:', document.filename);
-    } else {
-      console.error('❌ Document not found. Looking for ID:', docId);
-      console.error('Available document IDs:', this.allDocuments.map(d => d.id));
+    // If the document is missing locally, refresh document list once
+    if (!document) {
+      await this.loadDocuments();
+      document = this.allDocuments.find(doc => doc.id === docId);
     }
+    
+    if (!document) {
+      console.error('❌ Document not found after refresh. Looking for ID:', docId);
+      console.error('Available document IDs:', this.allDocuments.map(d => d.id));
+      return;
+    }
+    
+    // If the document isn't yet attached to the active session, attach it automatically
+    if (this.currentSession && !this.currentSession.document_ids.includes(document.id)) {
+      console.log(`📎 Attaching document ${document.filename} to current session from citation click`);
+      await this.addExistingDocument(document);
+    }
+    
+    // Ensure explorer is visible and show the PDF
+    this.showExplorer = true;
+    this.viewDocumentPDF(document);
+    
+    console.log('✅ Opening document from citation:', document.filename);
   }
 
   ngOnDestroy() {
@@ -428,8 +444,9 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
       doc => this.currentSession!.document_ids.includes(doc.id)
     );
     // Update available documents (not yet in session)
+    const attachableStatuses: Array<Document['status']> = ['indexed'];
     this.availableDocuments = this.allDocuments.filter(
-      doc => !this.currentSession!.document_ids.includes(doc.id) && doc.status === 'indexed'
+      doc => !this.currentSession!.document_ids.includes(doc.id) && attachableStatuses.includes(doc.status)
     );
     // Initialize filtered list
     this.filteredAvailableDocuments = [...this.availableDocuments];
@@ -516,6 +533,73 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
       this.graphEdges = [];
     }
   }
+
+  // Apply layout to graph
+  private applyLayout(graph: any, layout: 'force' | 'circular' | 'grid' | 'random'): void {
+    console.log(`📐 Applying ${layout} layout...`);
+    
+    switch (layout) {
+      case 'force':
+        // Apply ForceAtlas2 for physics-based layout
+        random.assign(graph, { scale: 100 }); // Start with random positions
+        forceAtlas2.assign(graph, {
+          iterations: 100,
+          settings: {
+            gravity: 1,
+            scalingRatio: 10,
+            strongGravityMode: false,
+            slowDown: 1,
+            barnesHutOptimize: graph.order > 100,
+            barnesHutTheta: 0.5
+          }
+        });
+        break;
+      
+      case 'circular':
+        // Apply circular layout
+        circular.assign(graph, { scale: 100 });
+        break;
+      
+      case 'grid':
+        // Apply grid layout
+        const nodes = graph.nodes();
+        const gridSize = Math.ceil(Math.sqrt(nodes.length));
+        const spacing = 200 / gridSize;
+        
+        nodes.forEach((node: string, index: number) => {
+          const row = Math.floor(index / gridSize);
+          const col = index % gridSize;
+          graph.setNodeAttribute(node, 'x', (col - gridSize / 2) * spacing);
+          graph.setNodeAttribute(node, 'y', (row - gridSize / 2) * spacing);
+        });
+        break;
+      
+      case 'random':
+        // Apply random layout
+        random.assign(graph, { scale: 100 });
+        break;
+    }
+    
+    console.log(`✅ ${layout} layout applied`);
+  }
+
+  // Change layout for document explorer graph
+  changeLayout(layout: 'force' | 'circular' | 'grid' | 'random'): void {
+    this.currentLayout = layout;
+    if (this.graphInstance && this.sigmaInstance) {
+      this.applyLayout(this.graphInstance, layout);
+      this.sigmaInstance.refresh();
+    }
+  }
+
+  // Change layout for response graph
+  changeResponseGraphLayout(layout: 'force' | 'circular' | 'grid' | 'random'): void {
+    this.responseGraphLayout = layout;
+    if (this.responseGraphInstance && this.responseSigmaInstance) {
+      this.applyLayout(this.responseGraphInstance, layout);
+      this.responseSigmaInstance.refresh();
+    }
+  }
   
   openGraphFullscreen() {
     this.isGraphFullscreen = true;
@@ -573,17 +657,13 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
         'Contract': '#6366f1'
       };
       
-      // Add nodes with random spread layout (better for force-directed feel)
+      // Add nodes (positions will be set by layout algorithm)
       console.log('🔵 Adding nodes to graph...');
-      this.graphEntities.forEach((entity, index) => {
-        // Spread nodes randomly across a large area
-        const x = (Math.random() - 0.5) * 200; // -100 to 100
-        const y = (Math.random() - 0.5) * 200; // -100 to 100
-        
+      this.graphEntities.forEach((entity) => {
         (this.graphInstance as any).addNode(entity.id, {
           label: entity.name,
-          x: x,
-          y: y,
+          x: 0,
+          y: 0,
           size: 8,
           color: typeColors[entity.type] || '#94a3b8'
         });
@@ -634,6 +714,9 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
       });
       
       console.log(`✅ Added ${edgesAdded} edges (skipped ${edgesSkipped}) out of ${this.graphEdges.length} total`);
+      
+      // Apply layout to the graph
+      this.applyLayout(this.graphInstance, this.currentLayout);
       
       // Create Sigma instance with edge rendering enabled
       console.log('🎨 Creating Sigma instance with settings...');
@@ -1259,17 +1342,12 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
         'Location': '#8b5cf6'
       };
 
-      // Add nodes
-      entities.forEach((entity, index) => {
-        const angle = (index / entities.length) * 2 * Math.PI;
-        const radius = 30;
-        const x = Math.cos(angle) * radius;
-        const y = Math.sin(angle) * radius;
-
+      // Add nodes (positions will be set by layout algorithm)
+      entities.forEach((entity) => {
         (this.responseGraphInstance as any).addNode(entity.id, {
           label: entity.name,
-          x: x,
-          y: y,
+          x: 0,
+          y: 0,
           size: 10,
           color: typeColors[entity.type] || '#94a3b8'
         });
@@ -1294,6 +1372,9 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
           );
         }
       });
+
+      // Apply layout to the response graph
+      this.applyLayout(this.responseGraphInstance, this.responseGraphLayout);
 
       // Create Sigma instance
       this.responseSigmaInstance = new Sigma(

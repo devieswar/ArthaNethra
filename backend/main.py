@@ -504,8 +504,14 @@ async def normalize_to_graph(document_id: str):
         ]
 
         # Normalize to graph
+        # Include markdown from document metadata in ade_output for narrative extraction
+        ade_output_with_markdown = dict(document.ade_output)
+        if document.metadata and isinstance(document.metadata, dict):
+            if markdown_text := document.metadata.get("markdown"):
+                ade_output_with_markdown["markdown"] = markdown_text
+        
         entities, edges = await normalization_service.normalize_to_graph(
-            document.ade_output,
+            ade_output_with_markdown,
             document_id
         )
         
@@ -1296,6 +1302,7 @@ async def send_message(
             context = {
                 "graph_id": graph_id,
                 "document_id": document_id,
+                "document_ids": document_ids,  # CRITICAL: Pass document_ids for filtering
                 "entities": [],
                 "documents": []
             }
