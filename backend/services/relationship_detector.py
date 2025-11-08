@@ -322,12 +322,22 @@ Provide relationships in JSON format."""
         self,
         llm_edges: List[Edge],
         entities: List[Entity],
-        graph_id: str
+        graph_id: str,
+        existing_narrative_edges: List[Edge] = None
     ) -> List[Edge]:
         """
         Add heuristic-based edges to supplement LLM findings.
         Use for obvious relationships that don't need LLM reasoning.
+        
+        Args:
+            llm_edges: Edges detected by LLM
+            entities: All entities
+            graph_id: Graph identifier
+            existing_narrative_edges: Edges from narrative extraction (to avoid duplicates)
         """
+        if existing_narrative_edges is None:
+            existing_narrative_edges = []
+        
         heuristic_edges = []
         
         # Create entity lookup
@@ -360,7 +370,7 @@ Provide relationships in JSON format."""
         # Generic Heuristic: Group entities by shared property values
         # This works for ANY document type (locations→county, companies→industry, etc.)
         property_edges = self._create_shared_property_edges(
-            entities, llm_edges + heuristic_edges, graph_id
+            entities, llm_edges + heuristic_edges + existing_narrative_edges, graph_id
         )
         heuristic_edges.extend(property_edges)
         

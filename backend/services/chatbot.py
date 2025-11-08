@@ -315,6 +315,21 @@ Your role is to help analysts understand complex financial documents by:
 - Providing evidence-backed insights with specific references to organizations and amounts
 - Detecting risks and anomalies
 - Explaining findings in clear, natural language that business users can understand
+
+**CRITICAL SCOPE RESTRICTION:**
+- You can ONLY use information from the documents currently attached to this chat session
+- The attached documents are listed in the "Available Documents (for citations)" section below
+- If the tool returns results from other documents NOT in the attached list, IGNORE those results
+- If you cannot find the answer in the attached documents, say so clearly
+- DO NOT reference or use data from documents outside the attached set
+
+**MANDATORY DOCUMENT SEARCH:**
+- **ALWAYS call document_search FIRST** before answering ANY question
+- This is NOT optional - you MUST search the attached documents for every query
+- Even if you think you know the answer, you MUST verify it against the document search results
+- The document_search tool returns the authoritative source of truth from the attached documents
+- After getting search results, synthesize your answer from those chunks
+- If search returns 0 results, then you can say "no information found"
 {entities_context}
 
 TOOL USAGE GUIDE:
@@ -388,9 +403,12 @@ TOOL USAGE GUIDE:
    - Use `entity_type` param to specify Location, Company, Loan, or Invoice
 
 IMPORTANT INSTRUCTIONS:
-- ALWAYS use graph_query tool when user asks about cities, companies, loans, etc.
-- When you receive tool results, you MUST use them to answer the question - DO NOT say "Let me try a different approach"
-- If tool returns 0 results, say something natural like: "I didn't find any cities matching those criteria in the uploaded documents" or "No data available yet - please upload a document first"
+- **STEP 1 (MANDATORY):** ALWAYS start by calling document_search with a relevant query to search the attached documents
+- **STEP 2:** If the question involves structured data (cities, companies, financials), also call graph_query
+- **STEP 3:** Synthesize your answer from the search results - document_search chunks are your primary source
+- The document_search results are MANDATORY - you cannot skip this step
+- After receiving document_search results, use them to formulate your answer
+- If tool returns 0 results, say something natural like: "I didn't find any information about this in the uploaded documents"
 - When metrics return a "message" field, translate it to natural language (don't say "the metric returned a message")
 - Extract property names from the question using EXACT field names:
   * "cash" or "cash balance" → use "cash_and_cash_equivalents"
@@ -403,14 +421,44 @@ IMPORTANT INSTRUCTIONS:
 - Provide specific organization names, dollar amounts, and percentages from the results
 - For financial metrics, cite actual numbers with proper formatting ($1.2M, 45%, etc.)
 - If asked about risks, explain the concerning financial patterns in plain language
+
+CITATION REQUIREMENTS:
+- **Include citations at the BOTTOM of your response** in a "Sources:" section
+- **TWO SOURCES OF CITATION DATA:**
+  1. When **document_search** tool returns chunks, EACH chunk includes "document_id" and "filename" fields
+  2. When **graph_query** tool returns entities, EACH entity includes "document_id" field showing its source document
+- **Citation format - ALWAYS at the bottom:**
+  
+  **Sources:**
+  - [balance sheet](doc:doc_31636469f067)
+  - [risk factors](doc:doc_ce4557ac4e8b)
+
+- **Citation rules:**
+  1. Group all citations in a "Sources:" section at the END of your response
+  2. List each unique document ONCE (deduplicate by document_id)
+  3. ONLY cite documents that are in the "Available Documents" list above
+  4. Extract document_id and filename from tool results
+  5. Format: `- [FILENAME](doc:DOCUMENT_ID)` (one per line)
+  6. **CRITICAL:** If you mention or reference a document by name in your response, you MUST cite it in Sources
+  7. When document_search returns chunks, check the "document_id" and "filename" fields in EACH chunk
+  8. Collect ALL unique document_ids from ALL tool results and cite them all
+  
+- **Example response structure:**
+  ```
+  Here are the top 10 balance sheet items:
+  1. Item A: $100M
+  2. Item B: $80M
+  ...
+  
+  **Sources:**
+  - [balance sheet Q3 2024](doc:doc_31636469f067)
+  ```
+
 General guidelines:
-- Always cite the document/page when you use evidence.
-- When referencing a document, create a clickable citation link using this format: [Source: Document Name](doc:DOCUMENT_ID) or [View Document](document:DOCUMENT_ID)
-  * Example: "Based on the [DocuSign Form 8-K](doc:doc_abc123), the revenue was..."
-  * Use the actual document IDs from the "Available Documents (for citations)" section above
-  * Place citation links naturally in your response where you reference document information
 - If nothing is found, say so plainly and suggest a next step (e.g. upload more data, relax the filter, or re-run indexing).
 - Include numbers or dates when they matter.
+- **IMPORTANT:** If you reference multiple documents in your response (e.g., "balance sheet shows X, risk factors mention Y"), you MUST cite ALL of them in the Sources section
+- **VERIFY BEFORE RESPONDING:** Count how many unique documents you referenced and ensure your Sources section lists that same number
 - NEVER use technical jargon in your responses to users. Forbidden words: "knowledge graph", "graph_id", "entity", "metric_compute", "graph_query", "tool", "Neo4j", "Weaviate", "vector", "embedding", "property_threshold", "sequential_drop", etc.
 - Instead use natural business language: "financial data", "cities", "companies", "documents", "analysis", "search", "comparison", "found", "calculated"
 - When you use tools internally, NEVER mention the tool names or parameters to the user
@@ -437,75 +485,16 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
 """
         
         try:
-            # First call: get model's response with potential tool use
-            # Use unified format (will be adapted per model in _invoke_with_fallback)
-            request_body = {
-                "messages": messages,
-                "inferenceConfig": {
-                    "maxTokens": 4096,
-                    "temperature": 0.7,
-                    "topP": 0.9
-                },
-                "tools": self.tools  # Add tools for Claude
-            }
+            # Tool execution loop - allow multiple rounds of tool calls
+            max_iterations = 3  # Allow up to 3 iterations for complex queries
+            iteration = 0
             
-            # Add system prompt if provided
-            if system_prompt:
-                request_body["system"] = [{"text": system_prompt}]
-            
-            response_body = self._invoke_with_fallback(request_body)
-            
-            # Handle Claude response format
-            content_blocks = response_body.get("content", [])
-            tool_result_messages: List[Dict[str, Any]] = []
-            
-            # First, stream any text back to the UI
-            for block in content_blocks:
-                if block["type"] == "text":
-                    yield block["text"]
-            
-            # Next, execute any requested tools and build tool_result messages
-            for block in content_blocks:
-                if block["type"] != "tool_use":
-                    continue
+            while iteration < max_iterations:
+                iteration += 1
+                logger.info(f"🔄 Tool execution loop iteration {iteration}/{max_iterations}")
                 
-                tool_name = block["name"]
-                tool_input = block["input"]
-                tool_use_id = block["id"]
-                
-                logger.info(f"Executing tool: {tool_name} with input: {tool_input}")
-                
-                try:
-                    tool_result = await self._execute_tool(tool_name, tool_input, context)
-                except Exception as tool_error:
-                    logger.exception(
-                        "Tool execution failed for %s with input %s", tool_name, tool_input
-                    )
-                    tool_result = {
-                        "error": "Tool execution failed.",
-                        "details": str(tool_error)
-                    }
-                
-                tool_result_messages.append({
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_use_id,
-                            "content": json.dumps(tool_result)
-                        }
-                    ]
-                })
-                    
-            # If there were tool calls, send the tool results back to Claude
-            if tool_result_messages:
-                messages.append({
-                    "role": "assistant",
-                    "content": content_blocks
-                })
-                messages.extend(tool_result_messages)
-                
-                final_request = {
+                # Build request with current conversation state
+                request_body = {
                     "messages": messages,
                     "inferenceConfig": {
                         "maxTokens": 4096,
@@ -514,14 +503,88 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
                     },
                     "tools": self.tools
                 }
+                
                 if system_prompt:
-                    final_request["system"] = [{"text": system_prompt}]
+                    request_body["system"] = [{"text": system_prompt}]
                 
-                final_body = self._invoke_with_fallback(final_request)
+                response_body = self._invoke_with_fallback(request_body)
+                content_blocks = response_body.get("content", [])
                 
-                for final_block in final_body.get("content", []):
-                    if final_block["type"] == "text":
-                        yield final_block["text"]
+                # Stream any text back to the UI
+                has_text = False
+                for block in content_blocks:
+                    if block["type"] == "text":
+                        yield block["text"]
+                        has_text = True
+                
+                # Check if there are tool calls to execute
+                tool_result_content_blocks: List[Dict[str, Any]] = []
+                has_tool_calls = False
+                
+                for block in content_blocks:
+                    if block["type"] != "tool_use":
+                        continue
+                    
+                    has_tool_calls = True
+                    tool_name = block["name"]
+                    tool_input = block["input"]
+                    tool_use_id = block["id"]
+                    
+                    logger.info(f"Executing tool: {tool_name} with input: {tool_input}")
+                    
+                    try:
+                        tool_result = await self._execute_tool(tool_name, tool_input, context)
+                    except Exception as tool_error:
+                        logger.exception(
+                            "Tool execution failed for %s with input %s", tool_name, tool_input
+                        )
+                        tool_result = {
+                            "error": "Tool execution failed.",
+                            "details": str(tool_error)
+                        }
+                    
+                    # Collect tool_result blocks (NOT separate messages)
+                    tool_result_content_blocks.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": json.dumps(tool_result)
+                    })
+                
+                # If there were tool calls, add them to conversation and continue loop
+                if has_tool_calls:
+                    # Log tool_use IDs for debugging
+                    tool_use_ids = [block["id"] for block in content_blocks if block["type"] == "tool_use"]
+                    tool_result_ids = [block["tool_use_id"] for block in tool_result_content_blocks]
+                    logger.info(f"🔧 Tool use IDs: {tool_use_ids}")
+                    logger.info(f"🔧 Tool result IDs: {tool_result_ids}")
+                    
+                    if set(tool_use_ids) != set(tool_result_ids):
+                        logger.error(f"❌ MISMATCH: tool_use IDs don't match tool_result IDs!")
+                        logger.error(f"Missing tool results for: {set(tool_use_ids) - set(tool_result_ids)}")
+                        break
+                    
+                    # Add assistant message with tool_use blocks
+                    messages.append({
+                        "role": "assistant",
+                        "content": content_blocks
+                    })
+                    # Add ALL tool_result blocks in a SINGLE user message (Bedrock requirement)
+                    messages.append({
+                        "role": "user",
+                        "content": tool_result_content_blocks
+                    })
+                    logger.info(f"✅ Executed {len(tool_result_content_blocks)} tools, continuing to next iteration")
+                    logger.info(f"📝 Messages array now has {len(messages)} messages")
+                    # Log the structure for debugging
+                    for i, msg in enumerate(messages):
+                        role = msg.get("role")
+                        content_summary = f"{len(msg.get('content', []))} blocks" if isinstance(msg.get('content'), list) else "string"
+                        logger.info(f"   [{i}] {role}: {content_summary}")
+                    # Continue loop to let AI process tool results
+                else:
+                    # No more tool calls, we're done
+                    logger.info(f"✅ No more tool calls, conversation complete after {iteration} iterations")
+                    break
         
         except Exception as e:
             logger.error(f"Chat error: {str(e)}")
@@ -550,6 +613,8 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
             
             # Use Neo4j for property-based queries (more precise)
             graph_id = context.get("graph_id") if context else None
+            # Get document_ids from context to filter results to only attached documents
+            document_ids = context.get("document_ids", []) if context else []
             combined_results: List[Dict[str, Any]] = []
             sources: List[str] = []
             neo4j_results: List[Dict[str, Any]] = []
@@ -561,7 +626,8 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
                         entity_types=entity_types,
                         property_filters=property_filters,
                         limit=limit,
-                        graph_id=graph_id
+                        graph_id=graph_id,
+                        document_ids=document_ids
                     )
                     logger.info(
                         f"Neo4j query returned {len(neo4j_results)} results (graph_id: {graph_id}, entity_types: {entity_types})"
@@ -607,6 +673,14 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
                         ]
                         logger.info(f"After type filtering: {len(weaviate_results)} results")
                     
+                    # CRITICAL: Filter by document_ids if provided (for chat sessions)
+                    if document_ids and len(document_ids) > 0 and weaviate_results:
+                        weaviate_results = [
+                            r for r in weaviate_results
+                            if r.get("documentId") in document_ids or r.get("document_id") in document_ids
+                        ]
+                        logger.info(f"After document_id filtering: {len(weaviate_results)} results (document_ids: {document_ids})")
+                    
                     if weaviate_results:
                         combined_results.extend(weaviate_results)
                         sources.append("weaviate")
@@ -614,6 +688,7 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
                     logger.warning(f"Weaviate query failed: {e}")
             
             # Fallback: use entities from context if neither Neo4j nor Weaviate produced results
+            # Context entities are already filtered by document_ids in main.py (lines 1310-1324)
             if not combined_results and context.get("entities"):
                 query_lower = query_text.lower()
                 matching_entities = [
@@ -628,7 +703,7 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
                 combined_results = matching_entities[:limit]
                 if combined_results:
                     sources.append("context")
-                logger.info(f"Context search returned {len(combined_results)} results")
+                logger.info(f"Context search returned {len(combined_results)} results (already filtered by document_ids)")
             
             # Deduplicate while preserving order and re-apply property filters as a safeguard
             seen_keys = set()
@@ -692,6 +767,16 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
             try:
                 chunks = await self.indexing_service.search_document_chunks(query, limit)
                 logger.info(f"Document search returned {len(chunks)} chunks for: {query}")
+                
+                # CRITICAL: Filter chunks by document_ids if provided (for chat sessions with attached documents)
+                document_ids = context.get("document_ids", []) if context else []
+                if document_ids and len(document_ids) > 0:
+                    original_count = len(chunks)
+                    chunks = [
+                        chunk for chunk in chunks
+                        if chunk.get("document_id") in document_ids
+                    ]
+                    logger.info(f"🔍 Filtered document_search chunks: {original_count} -> {len(chunks)} (document_ids: {document_ids})")
                 
                 return {
                     "query": query,
@@ -1009,9 +1094,10 @@ Keep it under 200 words and professional."""
         entity_types: List[str],
         property_filters: Dict[str, Any],
         limit: int,
-        graph_id: str = None
+        graph_id: str = None,
+        document_ids: List[str] = None
     ) -> List[Dict[str, Any]]:
-        """Query Neo4j with entity type and property filters"""
+        """Query Neo4j with entity type and property filters, optionally filtered by document_ids"""
         if not self.indexing_service.neo4j_driver:
             return []
         
@@ -1060,21 +1146,29 @@ Keep it under 200 words and professional."""
         if graph_id:
             graph_filter = f"AND e.graphId = '{graph_id}'"
         
+        # CRITICAL: Filter by document_ids if provided (for chat sessions with attached documents)
+        document_filter = ""
+        if document_ids and len(document_ids) > 0:
+            doc_list = "', '".join(document_ids)
+            document_filter = f"AND e.documentId IN ['{doc_list}']"
+            logger.info(f"🔍 Filtering entities by document_ids: {document_ids}")
+        
         type_filter = ""
         if normalized_types:
             type_list = "', '".join(normalized_types)
             type_filter = f"AND e.type IN ['{type_list}']"
         
         # Build property filters - use Python filtering for complex queries
-        # Note: Neo4j stores properties as entityId, graphId, type, name, properties (not id)
+        # Note: Neo4j stores properties as entityId, graphId, type, name, properties, documentId (not id)
         cypher = f"""
         MATCH (e:Entity)
-        WHERE true {graph_filter} {type_filter}
+        WHERE true {graph_filter} {document_filter} {type_filter}
         RETURN 
             e.entityId AS id,
             e.name AS name,
             e.type AS type,
-            e.properties AS properties
+            e.properties AS properties,
+            e.documentId AS document_id
         LIMIT {limit * 2}
         """
         
@@ -1100,7 +1194,8 @@ Keep it under 200 words and professional."""
                         "id": record.get("id"),
                         "name": record.get("name"),
                         "type": record.get("type"),
-                        "properties": props
+                        "properties": props,
+                        "document_id": record.get("document_id")  # Include for citations
                     })
                 
                 logger.info(f"Neo4j query returned {len(entities)} entities")

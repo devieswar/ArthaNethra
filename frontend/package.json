@@ -28,6 +28,8 @@
     "autoprefixer": "^10.4.16",
     "echarts": "^5.4.3",
     "graphology": "^0.25.4",
+    "graphology-layout": "^0.6.1",
+    "graphology-layout-forceatlas2": "^0.10.1",
     "markdown-it": "^14.1.0",
     "ngx-echarts": "^18.0.0",
     "ngx-extended-pdf-viewer": "^20.0.0",

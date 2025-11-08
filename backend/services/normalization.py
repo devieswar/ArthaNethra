@@ -15,6 +15,7 @@ from services.document_type_detector import DocumentTypeDetector
 from services.invoice_parser import InvoiceParser
 from services.contract_parser import ContractParser
 from services.loan_parser import LoanParser
+from services.narrative_parser import NarrativeParser
 
 
 class NormalizationService:
@@ -43,6 +44,7 @@ class NormalizationService:
         self.invoice_parser = InvoiceParser()
         self.contract_parser = ContractParser()
         self.loan_parser = LoanParser()
+        self.narrative_parser = NarrativeParser()
     
     async def normalize_to_graph(
         self,
@@ -70,12 +72,62 @@ class NormalizationService:
             graph_id
         )
         
-        # Create relationships
+        # Special handling for narrative documents
+        # If we got entities from narrative parser, also extract relationships from chunks
+        narrative_edges = []
+        # Try multiple locations for markdown (different ADE output formats)
+        markdown = ade_output.get("markdown") or ade_output.get("metadata", {}).get("markdown", "")
+        
+        if entities and markdown:
+            # Check if entities came from narrative parser AND already have relationships
+            has_narrative_entities = any(
+                e.properties.get("extracted_from") in ["narrative_text", "narrative_paragraph", "narrative_llm"] 
+                for e in entities
+            )
+            
+            # Check if relationships were already extracted (attached to entities)
+            if has_narrative_entities and hasattr(entities[0], '_narrative_relationships'):
+                logger.info("✅ Using relationships already extracted with narrative entities (no re-extraction needed)")
+                narrative_edges = entities[0]._narrative_relationships
+            elif has_narrative_entities:
+                logger.info("🔄 Detected narrative document - extracting relationships from text chunks")
+                try:
+                    # Extract relationships directly from narrative chunks
+                    _, narrative_edges = await self.narrative_parser.extract_entities_and_relationships_from_chunks(
+                        markdown, document_id, graph_id
+                    )
+                    logger.info(f"✅ Narrative parser extracted {len(narrative_edges)} relationships from text")
+                except Exception as e:
+                    logger.warning(f"Narrative relationship extraction failed: {e}")
+        
+        # Create relationships using standard method
+        # Skip LLM-based relationship detection for narrative entities (already have context-based relationships)
+        has_narrative_entities = any(
+            e.properties.get("extracted_from") in ["narrative_text", "narrative_paragraph", "narrative_llm"] 
+            for e in entities
+        )
+        
         edges = await self._create_edges(
             entities,
             ade_output,
-            graph_id
+            graph_id,
+            skip_llm_detection=has_narrative_entities,  # Skip redundant LLM analysis
+            existing_narrative_edges=narrative_edges  # Pass narrative edges to avoid duplicates
         )
+        
+        # Combine with narrative edges
+        if narrative_edges:
+            edges.extend(narrative_edges)
+            # Deduplicate
+            seen = set()
+            unique_edges = []
+            for edge in edges:
+                key = (edge.source, edge.target, edge.type)
+                if key not in seen:
+                    seen.add(key)
+                    unique_edges.append(edge)
+            edges = unique_edges
+            logger.info(f"✅ Combined edges: {len(edges)} total (including {len(narrative_edges)} from narrative)")
         
         logger.info(
             f"Normalized graph: {len(entities)} entities, {len(edges)} edges"
@@ -97,7 +149,11 @@ class NormalizationService:
         2. FALLBACK: Use deterministic parser if ADE fails or yields too few entities
         """
         entities = []
-        markdown = ade_output.get("markdown", "")
+        # Try multiple locations for markdown (different ADE output formats)
+        markdown = ade_output.get("markdown") or ade_output.get("metadata", {}).get("markdown", "")
+        logger.info(f"🔍 DEBUG ade_output keys: {list(ade_output.keys())}")
+        if "metadata" in ade_output:
+            logger.info(f"🔍 DEBUG metadata keys: {list(ade_output['metadata'].keys())}")
         
         # STEP 1: Try ADE schema extraction FIRST (with new model)
         logger.info("🎯 PRIMARY EXTRACTION: Trying ADE with new model (extract-20251024)")
@@ -222,6 +278,39 @@ class NormalizationService:
         
         logger.info(f"✅ Deterministic parser extracted {len(entities)} entities")
         
+        # STEP 3: If both ADE and deterministic gave very few entities, try narrative parser
+        # Threshold: < 5 entities suggests a narrative document rather than structured data
+        total_entities = max(len(entities), len(ade_entities))
+        logger.info(f"🔍 DEBUG: entities={len(entities)}, ade_entities={len(ade_entities)}, markdown={len(markdown) if markdown else 0} chars")
+        if total_entities < 5 and len(markdown) > 10000:  # Long narrative document with few structured entities
+            logger.warning(f"⚠️ Only {total_entities} entities found from structured extraction, but document has {len(markdown)} chars")
+            logger.info("🔄 NARRATIVE DOCUMENT DETECTED: Using LLM-based narrative parser")
+            
+            # Use the advanced LLM-based extraction (extracts entities + relationships)
+            # Store relationships too so we don't have to extract twice
+            try:
+                narrative_entities, narrative_relationships = await self.narrative_parser.extract_entities_and_relationships_from_chunks(
+                    markdown, document_id, graph_id
+                )
+                logger.info(f"✅ Narrative parser (LLM) extracted {len(narrative_entities)} entities and {len(narrative_relationships)} relationships")
+            except Exception as e:
+                logger.warning(f"LLM narrative parser failed: {e}, trying regex fallback")
+                # Fallback to regex-based extraction
+                narrative_entities = self.narrative_parser.extract_entities_from_narrative(
+                    markdown, document_id, graph_id
+                )
+                logger.info(f"✅ Narrative parser (regex) extracted {len(narrative_entities)} entities")
+            
+            if len(narrative_entities) > 0:
+                logger.info(f"📊 Using narrative parser: {len(narrative_entities)} entities")
+                # Store narrative relationships to use later (avoid re-extraction)
+                merged_entities = merge_with_deterministic(narrative_entities)
+                # Attach the relationships as a temporary attribute
+                for entity in merged_entities:
+                    if not hasattr(entity, '_narrative_relationships'):
+                        entity._narrative_relationships = narrative_relationships
+                return merged_entities
+        
         # Use whichever gave us more entities
         if len(entities) > len(ade_entities):
             logger.info(f"📊 Using deterministic parser: {len(entities)} entities (better than ADE's {len(ade_entities)})")
@@ -328,7 +417,9 @@ class NormalizationService:
         self,
         entities: List[Entity],
         ade_output: Dict[str, Any],
-        graph_id: str
+        graph_id: str,
+        skip_llm_detection: bool = False,
+        existing_narrative_edges: List[Edge] = None
     ) -> List[Edge]:
         """Create edges (relationships) between entities using LLM + heuristics"""
         
@@ -338,24 +429,33 @@ class NormalizationService:
         logger.info(f"🔗 Creating relationships for {len(entities)} entities...")
         
         # Strategy 1: LLM-based relationship detection (intelligent, adaptive)
-        # Use Claude to analyze entities and discover semantic relationships
-        try:
-            llm_edges = await self.relationship_detector.detect_relationships_chunked(
-                entities=entities,
-                graph_id=graph_id,
-                chunk_size=20  # Process 20 entities at a time
-            )
-            logger.info(f"✅ LLM detected {len(llm_edges)} relationships")
-        except Exception as e:
-            logger.warning(f"LLM relationship detection failed: {e}, using fallback")
-            llm_edges = []
+        # Skip for narrative documents (already have context-based relationships)
+        llm_edges = []
+        if skip_llm_detection:
+            logger.info("⏩ Skipping LLM relationship detection (narrative entities already have context-based relationships)")
+        else:
+            # Use Claude to analyze entities and discover semantic relationships
+            try:
+                llm_edges = await self.relationship_detector.detect_relationships_chunked(
+                    entities=entities,
+                    graph_id=graph_id,
+                    chunk_size=20  # Process 20 entities at a time
+                )
+                logger.info(f"✅ LLM detected {len(llm_edges)} relationships")
+            except Exception as e:
+                logger.warning(f"LLM relationship detection failed: {e}, using fallback")
+                llm_edges = []
         
         # Strategy 2: Enhance with heuristics (supplement obvious patterns)
         # Add rule-based edges that don't need LLM reasoning
+        if existing_narrative_edges is None:
+            existing_narrative_edges = []
+        
         all_edges = await self.relationship_detector.enhance_with_heuristics(
             llm_edges=llm_edges,
             entities=entities,
-            graph_id=graph_id
+            graph_id=graph_id,
+            existing_narrative_edges=existing_narrative_edges  # Pass separately to avoid duplicates
         )
         
         logger.info(f"✅ Total relationships: {len(all_edges)}")

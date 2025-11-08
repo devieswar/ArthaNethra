@@ -442,9 +442,9 @@
             </div>
             
             <div *ngIf="graphEntities.length > 0" class="flex-1 flex flex-col">
-              <!-- Graph Stats -->
+              <!-- Graph Stats and Layout Selector -->
               <div class="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                <div class="flex items-center justify-between">
+                <div class="flex items-center justify-between mb-2">
                   <div>
                     <div class="text-sm font-semibold text-blue-900">Interactive Graph</div>
                     <div class="text-xs text-blue-700 mt-1">{{ graphEntities.length }} nodes • {{ graphEdges.length }} edges</div>
@@ -463,6 +463,21 @@
                       </svg>
                     </button>
                   </div>
+                </div>
+                
+                <!-- Layout Selector -->
+                <div class="flex items-center gap-2 mt-2 pt-2 border-t border-blue-200">
+                  <span class="text-xs font-medium text-blue-700">Layout:</span>
+                  <button 
+                    *ngFor="let layout of layoutOptions"
+                    (click)="changeLayout(layout)"
+                    [class.bg-blue-600]="currentLayout === layout"
+                    [class.text-white]="currentLayout === layout"
+                    [class.bg-white]="currentLayout !== layout"
+                    [class.text-blue-700]="currentLayout !== layout"
+                    class="px-2 py-1 text-xs rounded font-medium hover:bg-blue-600 hover:text-white transition-colors capitalize">
+                    {{ layout }}
+                  </button>
                 </div>
               </div>
               
@@ -861,6 +876,21 @@
             <div>
               <h3 class="text-lg font-semibold text-gray-900">{{ selectedDocument?.filename }}</h3>
               <p class="text-sm text-gray-600">{{ graphEntities.length }} nodes • {{ graphEdges.length }} edges</p>
+              
+              <!-- Layout Selector for Fullscreen -->
+              <div class="flex items-center gap-2 mt-2">
+                <span class="text-xs font-medium text-gray-600">Layout:</span>
+                <button 
+                  *ngFor="let layout of layoutOptions"
+                  (click)="changeLayout(layout)"
+                  [class.bg-blue-600]="currentLayout === layout"
+                  [class.text-white]="currentLayout === layout"
+                  [class.bg-white]="currentLayout !== layout"
+                  [class.text-blue-700]="currentLayout !== layout"
+                  class="px-3 py-1 text-xs rounded-lg font-medium hover:bg-blue-600 hover:text-white transition-colors capitalize shadow-sm">
+                  {{ layout }}
+                </button>
+              </div>
             </div>
             <div class="flex items-center gap-4">
               <div class="text-xs text-gray-600">
@@ -980,6 +1010,21 @@
                 and 
                 <span class="font-semibold text-indigo-600">{{ (selectedMessageForGraph?.graphData?.relationships?.length ?? 0) }}</span> relationships
               </p>
+              
+              <!-- Layout Selector for Response Graph -->
+              <div class="flex items-center gap-2 mt-2">
+                <span class="text-xs font-medium text-gray-600">Layout:</span>
+                <button 
+                  *ngFor="let layout of layoutOptions"
+                  (click)="changeResponseGraphLayout(layout)"
+                  [class.bg-blue-600]="responseGraphLayout === layout"
+                  [class.text-white]="responseGraphLayout === layout"
+                  [class.bg-white]="responseGraphLayout !== layout"
+                  [class.text-blue-700]="responseGraphLayout !== layout"
+                  class="px-3 py-1 text-xs rounded-lg font-medium hover:bg-blue-600 hover:text-white transition-colors capitalize shadow-sm">
+                  {{ layout }}
+                </button>
+              </div>
             </div>
             <div class="flex items-center gap-4">
               <!-- Legend -->
