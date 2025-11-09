@@ -109,7 +109,7 @@ class DocumentTypeDetector:
             logger.info(f"Low confidence ({confidence:.2f}) for {best_type}, using generic")
             return self._default_detection(markdown)
         
-        logger.info(f"✅ Detected document type: {best_type} (confidence: {confidence:.2f})")
+        logger.info(f"Detected document type: {best_type} (confidence: {confidence:.2f})")
         
         return {
             "type": best_type,

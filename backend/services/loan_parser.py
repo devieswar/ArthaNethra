@@ -34,7 +34,7 @@ class LoanParser:
             - Borrower (company/person)
             - Covenant entities (loan conditions)
         """
-        logger.info("💰 Parsing loan agreement deterministically")
+        logger.info("Parsing loan agreement deterministically")
         
         soup = BeautifulSoup(markdown, 'html.parser')
         text = soup.get_text()
@@ -145,7 +145,7 @@ class LoanParser:
             )
             entities.append(fee_entity)
         
-        logger.info(f"✅ Extracted {len(entities)} entities from loan agreement")
+        logger.info(f"Extracted {len(entities)} entities from loan agreement")
         return entities
     
     def _extract_loan_metadata(self, text: str) -> Dict[str, Any]:

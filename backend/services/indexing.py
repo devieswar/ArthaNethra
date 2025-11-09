@@ -417,9 +417,9 @@ class IndexingService:
                     properties=props_json
                 )
                 
-                logger.debug(f"✅ Indexed {rel_type} relationship: {edge.source} -> {edge.target}")
+                logger.debug(f"Indexed {rel_type} relationship: {edge.source} -> {edge.target}")
         
-        logger.info(f"✅ Indexed {len(edges)} relationships to Neo4j with proper types")
+        logger.info(f"Indexed {len(edges)} relationships to Neo4j with proper types")
         return {"neo4j": {"relationships_count": len(edges)}}
     
     async def _index_to_weaviate(self, entities: List[Entity]) -> int:
