@@ -30,6 +30,7 @@
     opacity: 0;
     transform: translateY(10px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -45,13 +46,16 @@
   max-width: none;
 }
 
-.prose h1, .prose h2, .prose h3 {
+.prose h1,
+.prose h2,
+.prose h3 {
   margin-top: 1em;
   margin-bottom: 0.5em;
   font-weight: 600;
 }
 
-.prose ul, .prose ol {
+.prose ul,
+.prose ol {
   margin-top: 0.5em;
   margin-bottom: 0.5em;
   padding-left: 1.5em;
@@ -112,15 +116,18 @@
   align-items: center;
   gap: 0.35rem;
   padding: 0.35rem 0.85rem;
+  margin: 0.15rem 0.25rem;
   border: 1px solid rgba(16, 185, 129, 0.6);
   border-radius: 9999px;
   background-color: transparent;
   color: #047857;
   font-weight: 600;
+  font-size: 0.875rem;
   text-decoration: none;
   cursor: pointer;
   transition: all 0.2s ease;
   box-shadow: 0 1px 2px rgba(16, 185, 129, 0.18);
+  white-space: nowrap;
 }
 
 :host ::ng-deep .citation-link:hover {
@@ -129,6 +136,11 @@
   background-color: rgba(16, 185, 129, 0.1);
   transform: translateY(-1px);
   box-shadow: 0 4px 8px rgba(16, 185, 129, 0.22);
+}
+
+:host ::ng-deep .citation-link:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(16, 185, 129, 0.2);
 }
 
 :host ::ng-deep .prose-invert .citation-link {
@@ -144,8 +156,33 @@
   box-shadow: 0 4px 8px rgba(45, 212, 191, 0.35);
 }
 
+/* Citation link before page number icon */
+:host ::ng-deep .citation-link::before {
+  content: "📄";
+  font-size: 0.875em;
+  margin-right: 0.25rem;
+}
+
+/* Styling for multiple citation links grouped together */
+:host ::ng-deep p:has(.citation-link) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* Sources section styling */
+:host ::ng-deep strong:has-text("Sources") {
+  display: block;
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid rgba(16, 185, 129, 0.3);
+  color: #047857;
+  font-size: 1.1rem;
+}
+
 /* Textarea auto-resize */
 textarea {
   field-sizing: content;
 }
-

@@ -947,13 +947,24 @@ Provide the normalization strategy in JSON format."""
             if not entity_name:
                 continue
             
+            # Extract citations if available
+            citations = []
+            if "citations" in item:
+                citations = [
+                    Citation(**citation_data) if isinstance(citation_data, dict) else citation_data
+                    for citation_data in item.get("citations", [])
+                ]
+            elif "page" in item:
+                # Create citation from page number in properties
+                citations = [Citation(page=item["page"])]
+            
             # Create entity with all properties
             entity = Entity(
                 id=f"ent_{uuid.uuid4().hex[:12]}",
                 type=entity_type,
                 name=str(entity_name),
                 properties=item,  # Store all fields as properties
-                citations=[],
+                citations=citations,
                 document_id=document_id,
                 graph_id=graph_id
             )
@@ -1006,12 +1017,23 @@ Provide the normalization strategy in JSON format."""
                 f"{key}_{uuid.uuid4().hex[:6]}"
             )
             
+            # Extract citations if available
+            citations = []
+            if "citations" in item:
+                citations = [
+                    Citation(**citation_data) if isinstance(citation_data, dict) else citation_data
+                    for citation_data in item.get("citations", [])
+                ]
+            elif "page" in item:
+                # Create citation from page number in properties
+                citations = [Citation(page=item["page"])]
+            
             entity = Entity(
                 id=f"ent_{uuid.uuid4().hex[:12]}",
                 type=entity_type,
                 name=str(entity_name),
                 properties=item,
-                citations=[],
+                citations=citations,
                 document_id=document_id,
                 graph_id=graph_id
             )

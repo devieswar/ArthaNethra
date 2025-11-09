@@ -114,6 +114,8 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
   markdownHtml: SafeHtml | null = null;
   isMarkdownFullscreen = false;
   isPdfFullscreen = false;
+  pdfTargetPage: number | undefined = undefined; // Target page for PDF navigation
+  pdfCitedPages: number[] = []; // All pages cited for current document
   
   progressSteps: Array<{ name: string; label: string; status: 'pending' | 'active' | 'completed' | 'error' }> = [
     { name: 'upload', label: 'Uploading file...', status: 'pending' },
@@ -130,7 +132,7 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
   });
 
   constructor(private api: ApiService, private sanitizer: DomSanitizer, private ngZone: NgZone) {
-    // Customize markdown link renderer to handle citations
+    // Customize markdown link renderer to handle citations with page numbers
     const defaultRender = this.markdownRenderer.renderer.rules.link_open || 
       ((tokens: any, idx: any, options: any, env: any, self: any) => self.renderToken(tokens, idx, options));
     
@@ -141,11 +143,29 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
       if (hrefIndex >= 0) {
         const href = token.attrs![hrefIndex][1];
         
-        // Check if this is a citation link (e.g., doc:doc_abc123 or document:doc_abc123)
+        // Check if this is a citation link (e.g., doc:doc_abc123:47 or doc:doc_abc123 or document:doc_abc123:15,47,89)
         if (href.startsWith('doc:') || href.startsWith('document:')) {
-          const docId = href.replace(/^(doc:|document:)/, '');
+          const citationData = href.replace(/^(doc:|document:)/, '');
+          const parts = citationData.split(':');
+          const docId = parts[0];
+          const pageData = parts[1]; // Could be "47" or "15,47,89" or undefined/empty
+          
           token.attrSet('class', 'citation-link');
           token.attrSet('data-doc-id', docId);
+          
+          // Parse page number(s) - take the first page if multiple
+          // Only set page if we have valid page data (not 0, not empty)
+          if (pageData && pageData.trim()) {
+            const pages = pageData.split(',').map((p: string) => p.trim());
+            const firstPage = pages[0];
+            const pageNum = parseInt(firstPage, 10);
+            
+            // Only set page attribute if it's a valid page number (> 0)
+            if (!isNaN(pageNum) && pageNum > 0) {
+              token.attrSet('data-page', firstPage);
+            }
+          }
+          
           token.attrSet('href', 'javascript:void(0)');
           return self.renderToken(tokens, idx, options);
         }
@@ -177,19 +197,23 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
       if (citationLink) {
         event.preventDefault();
         const docId = citationLink.getAttribute('data-doc-id');
+        const pageAttr = citationLink.getAttribute('data-page');
+        const page = pageAttr ? parseInt(pageAttr, 10) : undefined;
+        
         if (docId) {
-          console.log('Citation clicked, doc ID:', docId);
+          console.log('Citation clicked, doc ID:', docId, 'page:', page);
           // Run inside Angular zone to trigger change detection
           this.ngZone.run(() => {
-            this.openDocumentFromCitation(docId);
+            this.openDocumentFromCitation(docId, page);
           });
         }
       }
     });
   }
   
-  async openDocumentFromCitation(docId: string) {
+  async openDocumentFromCitation(docId: string, page?: number) {
     console.log('Available documents:', this.allDocuments.map(d => ({ id: d.id, filename: d.filename })));
+    console.log('🔖 Opening citation - Document ID:', docId, 'Target Page:', page);
     
     let document = this.allDocuments.find(doc => doc.id === docId);
     
@@ -211,11 +235,11 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
       await this.addExistingDocument(document);
     }
     
-    // Ensure explorer is visible and show the PDF
+    // Ensure explorer is visible and show the PDF with page navigation
     this.showExplorer = true;
-    this.viewDocumentPDF(document);
+    this.viewDocumentPDF(document, page);
     
-    console.log('✅ Opening document from citation:', document.filename);
+    console.log(`✅ Opening document from citation: ${document.filename}${page ? ` at page ${page}` : ''}`);
   }
 
   ngOnDestroy() {
@@ -1045,9 +1069,32 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
     }
   }
 
-  async viewDocumentPDF(doc: Document) {
+  async viewDocumentPDF(doc: Document, page?: number, citedPages?: number[]) {
     this.selectedDocument = doc;
     this.explorerView = 'pdf';
+    this.pdfTargetPage = page; // Store target page for PDF viewer
+    this.pdfCitedPages = citedPages || (page ? [page] : []); // Store all cited pages
+    
+    if (page) {
+      console.log(`📄 Navigating to page ${page} in document: ${doc.filename}`);
+      if (citedPages && citedPages.length > 1) {
+        console.log(`📑 Multiple citation pages available: ${citedPages.join(', ')}`);
+      }
+    }
+  }
+  
+  navigateToCitedPage(pageIndex: number) {
+    if (pageIndex >= 0 && pageIndex < this.pdfCitedPages.length) {
+      this.pdfTargetPage = this.pdfCitedPages[pageIndex];
+      console.log(`📄 Jumping to cited page ${this.pdfTargetPage}`);
+    }
+  }
+  
+  getCurrentCitedPageIndex(): number {
+    if (this.pdfTargetPage && this.pdfCitedPages.length > 0) {
+      return this.pdfCitedPages.indexOf(this.pdfTargetPage);
+    }
+    return -1;
   }
 
   resetProgress() {

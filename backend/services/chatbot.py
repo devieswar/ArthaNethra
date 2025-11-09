@@ -29,6 +29,30 @@ class ChatbotService:
         # Define tools for AWS Bedrock models
         self.tools = self._initialize_tools()
     
+    def _sanitize_response(self, text: str) -> str:
+        """Remove internal XML/HTML tags from AI response"""
+        import re
+        
+        # Remove common internal tags that might leak into responses
+        internal_tags = [
+            r'<graph_quality_reflection>.*?</graph_quality_reflection>',
+            r'<graph_quality_score>.*?</graph_quality_score>',
+            r'<thinking>.*?</thinking>',
+            r'<reasoning>.*?</reasoning>',
+            r'<internal>.*?</internal>',
+            r'<debug>.*?</debug>',
+        ]
+        
+        cleaned_text = text
+        for tag_pattern in internal_tags:
+            cleaned_text = re.sub(tag_pattern, '', cleaned_text, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Remove any remaining XML-style tags (but preserve markdown links)
+        # This catches any other <tag>content</tag> patterns
+        cleaned_text = re.sub(r'<(?!\/?)([a-z_][a-z0-9_]*)[^>]*>.*?</\1>', '', cleaned_text, flags=re.DOTALL | re.IGNORECASE)
+        
+        return cleaned_text.strip()
+    
     def _invoke_with_fallback(self, body_dict: dict, models_to_try: list = None) -> dict:
         """
         Invoke Claude model with automatic fallback on throttling
@@ -426,33 +450,38 @@ IMPORTANT INSTRUCTIONS:
 CITATION REQUIREMENTS:
 - **Include citations at the BOTTOM of your response** in a "Sources:" section
 - **TWO SOURCES OF CITATION DATA:**
-  1. When **document_search** tool returns chunks, EACH chunk includes "document_id" and "filename" fields
-  2. When **graph_query** tool returns entities, EACH entity includes "document_id" field showing its source document
-- **Citation format - ALWAYS at the bottom:**
+  1. When **document_search** tool returns chunks, EACH chunk includes "document_id", "filename", and "page_number" fields
+  2. When **graph_query** tool returns entities, EACH entity includes "document_id" field and may have "citations" array with page info
+- **Citation format - ALWAYS at the bottom with individually clickable page numbers:**
   
   **Sources:**
-  - [balance sheet](doc:doc_31636469f067)
-  - [risk factors](doc:doc_ce4557ac4e8b)
+  - balance sheet Q3 2024 - Pages [47](doc:doc_31636469f067:47), [48](doc:doc_31636469f067:48)
+  - risk factors - Page [15](doc:doc_ce4557ac4e8b:15)
 
 - **Citation rules:**
   1. Group all citations in a "Sources:" section at the END of your response
-  2. List each unique document ONCE (deduplicate by document_id)
+  2. List each unique document with page numbers (deduplicate by document_id but collect all pages)
   3. ONLY cite documents that are in the "Available Documents" list above
-  4. Extract document_id and filename from tool results
-  5. Format: `- [FILENAME](doc:DOCUMENT_ID)` (one per line)
-  6. **CRITICAL:** If you mention or reference a document by name in your response, you MUST cite it in Sources
-  7. When document_search returns chunks, check the "document_id" and "filename" fields in EACH chunk
-  8. Collect ALL unique document_ids from ALL tool results and cite them all
+  4. Extract document_id, filename, and page_number from tool results
+  5. **FORMAT FOR SINGLE PAGE:** `- FILENAME - Page [X](doc:DOCUMENT_ID:X)`
+  6. **FORMAT FOR MULTIPLE PAGES:** `- FILENAME - Pages [X](doc:DOCUMENT_ID:X), [Y](doc:DOCUMENT_ID:Y), [Z](doc:DOCUMENT_ID:Z)`
+  7. **FORMAT FOR NO PAGE (when page unknown):** `- [FILENAME](doc:DOCUMENT_ID)` (no page reference at all)
+  8. **CRITICAL:** Each page number MUST be wrapped in its own clickable link with format [PAGE_NUM](doc:DOC_ID:PAGE_NUM)
+  9. When document_search returns chunks, check the "document_id", "filename", AND "page_number" fields in EACH chunk
+  10. When graph_query returns entities with citations array, extract page numbers from citations[0].page
+  11. **NEVER use page 0 or page 1 as defaults** - if page number is unavailable/unknown, omit page reference entirely
+  12. Remove duplicate page numbers for the same document (e.g., if pages 47, 47, 48 → show Pages [47], [48])
   
 - **Example response structure:**
   ```
   Here are the top 10 balance sheet items:
-  1. Item A: $100M
-  2. Item B: $80M
+  1. Item A: $100M (found on page 47)
+  2. Item B: $80M (found on page 48)
+  3. Item C: $75M (found on page 47)
   ...
   
   **Sources:**
-  - [balance sheet Q3 2024](doc:doc_31636469f067)
+  - balance sheet Q3 2024 - Pages [47](doc:doc_31636469f067:47), [48](doc:doc_31636469f067:48)
   ```
 
 General guidelines:
@@ -464,6 +493,9 @@ General guidelines:
 - Instead use natural business language: "financial data", "cities", "companies", "documents", "analysis", "search", "comparison", "found", "calculated"
 - When you use tools internally, NEVER mention the tool names or parameters to the user
 - Speak like a financial analyst, not a software engineer
+- **CRITICAL:** NEVER output XML/HTML tags in your response such as `<graph_quality_reflection>`, `<graph_quality_score>`, or any other angle-bracket tags. These are internal metadata and must NOT appear in user-facing responses.
+- Do NOT include any internal quality assessments, scoring, or diagnostic information in your responses
+- Your response should be pure natural language text with markdown formatting only (bold, lists, headers, links)
 
 GRAPH DATA OUTPUT:
 At the END of your response, after your natural language answer, include a JSON block with graph data representing the key entities and relationships mentioned in your answer.
@@ -511,11 +543,14 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
                 response_body = self._invoke_with_fallback(request_body)
                 content_blocks = response_body.get("content", [])
                 
-                # Stream any text back to the UI
+                # Stream any text back to the UI (with sanitization)
                 has_text = False
                 for block in content_blocks:
                     if block["type"] == "text":
-                        yield block["text"]
+                        # Sanitize response to remove internal tags
+                        sanitized_text = self._sanitize_response(block["text"])
+                        if sanitized_text:  # Only yield if there's content after sanitization
+                            yield sanitized_text
                         has_text = True
                 
                 # Check if there are tool calls to execute

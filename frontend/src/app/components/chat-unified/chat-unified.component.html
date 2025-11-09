@@ -649,10 +649,39 @@
               </div>
             </div>
             
+            <!-- Citation Pages Navigator -->
+            <div *ngIf="pdfCitedPages.length > 1" class="mb-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14"></path>
+                  </svg>
+                  <span class="text-sm font-semibold text-emerald-800">Citation Pages:</span>
+                </div>
+                <div class="flex items-center gap-1">
+                  <button 
+                    *ngFor="let page of pdfCitedPages; let i = index"
+                    (click)="navigateToCitedPage(i)"
+                    [class.bg-emerald-600]="pdfTargetPage === page"
+                    [class.text-white]="pdfTargetPage === page"
+                    [class.bg-white]="pdfTargetPage !== page"
+                    [class.text-emerald-700]="pdfTargetPage !== page"
+                    [class.border-emerald-300]="pdfTargetPage !== page"
+                    [class.hover:bg-emerald-100]="pdfTargetPage !== page"
+                    class="px-2 py-1 text-xs rounded border transition-colors font-medium"
+                    [title]="'Jump to page ' + page">
+                    {{ page }}
+                  </button>
+                </div>
+              </div>
+              <p class="text-xs text-emerald-600 mt-1">Click page numbers to quickly navigate between citations</p>
+            </div>
+            
             <div *ngIf="!isPdfFullscreen" class="flex-1 bg-gray-100 rounded-lg overflow-hidden">
               <ngx-extended-pdf-viewer
                 *ngIf="selectedDocument?.id as docId"
                 [src]="'http://localhost:8000/api/v1/documents/' + docId + '/pdf'"
+                [page]="pdfTargetPage"
                 [height]="'100%'"
                 [showToolbar]="true"
                 [showSidebarButton]="true"
@@ -991,11 +1020,39 @@
             </button>
           </div>
         </div>
+        
+        <!-- Citation Pages Navigator (Fullscreen) -->
+        <div *ngIf="pdfCitedPages.length > 1" class="px-4 py-3 bg-emerald-50 border-b border-emerald-200">
+          <div class="flex items-center justify-center gap-4">
+            <div class="flex items-center gap-2">
+              <svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14"></path>
+              </svg>
+              <span class="text-sm font-semibold text-emerald-800">Citation Pages:</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button 
+                *ngFor="let page of pdfCitedPages; let i = index"
+                (click)="navigateToCitedPage(i)"
+                [class.bg-emerald-600]="pdfTargetPage === page"
+                [class.text-white]="pdfTargetPage === page"
+                [class.bg-white]="pdfTargetPage !== page"
+                [class.text-emerald-700]="pdfTargetPage !== page"
+                [class.border-emerald-300]="pdfTargetPage !== page"
+                [class.hover:bg-emerald-100]="pdfTargetPage !== page"
+                class="px-3 py-1.5 text-sm rounded border transition-colors font-medium shadow-sm"
+                [title]="'Jump to page ' + page">
+                Page {{ page }}
+              </button>
+            </div>
+          </div>
+        </div>
 
         <div class="flex-1 bg-gray-100">
           <ngx-extended-pdf-viewer
             *ngIf="selectedDocument?.id as docId"
             [src]="'http://localhost:8000/api/v1/documents/' + docId + '/pdf'"
+            [page]="pdfTargetPage"
             [height]="'100%'"
             [showToolbar]="true"
             [showSidebarButton]="true"
