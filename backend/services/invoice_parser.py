@@ -34,7 +34,7 @@ class InvoiceParser:
             - Customer (company receiving invoice)
             - LineItem entities (individual items)
         """
-        logger.info("📋 Parsing invoice deterministically")
+        logger.info("Parsing invoice deterministically")
         
         soup = BeautifulSoup(markdown, 'html.parser')
         text = soup.get_text()
@@ -123,7 +123,7 @@ class InvoiceParser:
             )
             entities.append(item_entity)
         
-        logger.info(f"✅ Extracted {len(entities)} entities from invoice")
+        logger.info(f"Extracted {len(entities)} entities from invoice")
         return entities
     
     def _extract_invoice_metadata(self, text: str, markdown: str) -> Dict[str, Any]:

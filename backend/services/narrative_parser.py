@@ -88,7 +88,7 @@ class NarrativeParser:
         Returns:
             List of entities including organizations, money amounts, dates, risks, etc.
         """
-        logger.info(f"📝 Parsing narrative text ({len(markdown)} chars)")
+        logger.info(f"Parsing narrative text ({len(markdown)} chars)")
         
         soup = BeautifulSoup(markdown, 'html.parser')
         text = soup.get_text()
@@ -141,7 +141,7 @@ class NarrativeParser:
         risk_entities = self._extract_risk_entities(text, document_id, graph_id)
         entities.extend(risk_entities[:max_entities - len(entities)])
         
-        logger.info(f"✅ Extracted {len(entities)} entities from narrative text")
+        logger.info(f"Extracted {len(entities)} entities from narrative text")
         
         return entities
     
@@ -228,14 +228,14 @@ class NarrativeParser:
         Returns:
             Tuple of (entities, edges) extracted from narrative
         """
-        logger.info(f"📝 Extracting entities + relationships from narrative ({len(markdown)} chars)")
+        logger.info(f"Extracting entities + relationships from narrative ({len(markdown)} chars)")
         
         soup = BeautifulSoup(markdown, 'html.parser')
         text = soup.get_text()
         
         # Split into manageable chunks (by paragraph boundaries)
         chunks = self._chunk_text(text, chunk_size)
-        logger.info(f"📊 Processing {len(chunks)} text chunks")
+        logger.info(f"Processing {len(chunks)} text chunks")
         
         all_entities = []
         all_edges = []
@@ -260,13 +260,13 @@ class NarrativeParser:
                 
                 all_edges.extend(chunk_edges)
                 
-                logger.info(f"✅ Chunk {i+1}: {len(chunk_entities)} entities, {len(chunk_edges)} relationships")
+                logger.info(f"Chunk {i+1}: {len(chunk_entities)} entities, {len(chunk_edges)} relationships")
                 
             except Exception as e:
                 logger.warning(f"Failed to process chunk {i+1}: {e}")
                 continue
         
-        logger.info(f"✅ Extracted {len(all_entities)} entities and {len(all_edges)} relationships from narrative")
+        logger.info(f"Extracted {len(all_entities)} entities and {len(all_edges)} relationships from narrative")
         
         return all_entities, all_edges
     
@@ -347,7 +347,7 @@ Provide JSON response."""
                         "messages": [{"role": "user", "content": user_prompt}]
                     })
                 )
-                logger.debug(f"✅ Using Haiku for narrative extraction (cost-optimized)")
+                logger.debug("Using Haiku for narrative extraction (cost-optimized)")
             except Exception as haiku_error:
                 logger.warning(f"Haiku failed, falling back to Sonnet: {haiku_error}")
                 response = self.bedrock.invoke_model(

@@ -31,7 +31,7 @@ class MarkdownTableParser:
         Returns:
             Dict with extracted entities in structured format
         """
-        logger.info(f"📊 Parsing markdown tables deterministically ({len(markdown)} chars)")
+        logger.info(f"Parsing markdown tables deterministically ({len(markdown)} chars)")
         
         entities = []
         
@@ -44,7 +44,7 @@ class MarkdownTableParser:
             pipe_entities = self._parse_pipe_tables(markdown, max_entities - len(entities))
             entities.extend(pipe_entities)
         
-        logger.info(f"✅ Parsed {len(entities)} entities from markdown tables")
+        logger.info(f"Parsed {len(entities)} entities from markdown tables")
         
         # Save debug output
         import time
@@ -59,7 +59,7 @@ class MarkdownTableParser:
                         "tables_found": "multiple"
                     }
                 }, f, indent=2)
-            logger.info(f"💾 Table extraction result saved to: {debug_path}")
+            logger.info(f"Table extraction result saved to: {debug_path}")
         except Exception as e:
             logger.warning(f"Could not save debug output: {e}")
         
@@ -137,7 +137,7 @@ class MarkdownTableParser:
                 logger.warning(f"No headers found in table {table_idx}")
                 return entities
             
-            logger.info(f"📊 Table {table_idx}: Found {len(headers)} columns (from row {best_row_idx})")
+            logger.info(f"Table {table_idx}: Found {len(headers)} columns (from row {best_row_idx})")
             logger.info(f"   Headers: {headers[:10]}{'...' if len(headers) > 10 else ''}")
             
             # Extract rows (skip header rows - start after the best header row)
@@ -208,11 +208,11 @@ class MarkdownTableParser:
             properties = {}
             
             # DEBUG: Log array lengths
-            logger.debug(f"🔍 Row {row_idx}: {len(headers)} headers, {len(values)} values")
+            logger.debug(f"Row {row_idx}: {len(headers)} headers, {len(values)} values")
             
             # Handle length mismatch
             if len(headers) != len(values):
-                logger.warning(f"⚠️ Header/value mismatch: {len(headers)} headers vs {len(values)} values")
+                logger.warning(f"Header/value mismatch: {len(headers)} headers vs {len(values)} values")
                 # Pad shorter array with empty strings
                 max_len = max(len(headers), len(values))
                 headers = headers + [''] * (max_len - len(headers))
@@ -238,29 +238,29 @@ class MarkdownTableParser:
                         # Try integer first
                         if '.' not in clean_value and any(c.isdigit() for c in clean_value):
                             properties[header] = int(clean_value)
-                            logger.debug(f"  ✅ {header}: {properties[header]} (int)")
+                            logger.debug(f"{header}: {properties[header]} (int)")
                         elif '.' in clean_value:
                             properties[header] = float(clean_value)
-                            logger.debug(f"  ✅ {header}: {properties[header]} (float)")
+                            logger.debug(f"{header}: {properties[header]} (float)")
                         else:
                             # Not a number, keep as string (e.g., county names)
                             properties[header] = value
-                            logger.debug(f"  ✅ {header}: {value} (string)")
+                            logger.debug(f"{header}: {value} (string)")
                     except (ValueError, AttributeError):
                         # Keep as string
                         properties[header] = value
-                        logger.debug(f"  ✅ {header}: {value} (string)")
+                        logger.debug(f"{header}: {value} (string)")
                 else:
                     # Store empty/null values as None for non-numeric fields, 0 for numeric
                     properties[header] = None if header.lower() in ['county', 'state', 'country'] else 0
-                    logger.debug(f"  ⚪ {header}: {properties[header]} (empty)")
+                    logger.debug(f"{header}: {properties[header]} (empty)")
             
             # Only create entity if it has meaningful properties
             if not properties:
                 return None
             
             # Summary log at INFO level
-            logger.info(f"📦 Entity '{entity_name[:30]}': {len(properties)} properties extracted from {len(headers)} columns")
+            logger.info(f"Entity '{entity_name[:30]}': {len(properties)} properties extracted from {len(headers)} columns")
             
             return {
                 "type": entity_type,

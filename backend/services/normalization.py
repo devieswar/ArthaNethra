@@ -87,16 +87,16 @@ class NormalizationService:
             
             # Check if relationships were already extracted (attached to entities)
             if has_narrative_entities and hasattr(entities[0], '_narrative_relationships'):
-                logger.info("✅ Using relationships already extracted with narrative entities (no re-extraction needed)")
+                logger.info("Using relationships already extracted with narrative entities (no re-extraction needed)")
                 narrative_edges = entities[0]._narrative_relationships
             elif has_narrative_entities:
-                logger.info("🔄 Detected narrative document - extracting relationships from text chunks")
+                logger.info("Detected narrative document - extracting relationships from text chunks")
                 try:
                     # Extract relationships directly from narrative chunks
                     _, narrative_edges = await self.narrative_parser.extract_entities_and_relationships_from_chunks(
                         markdown, document_id, graph_id
                     )
-                    logger.info(f"✅ Narrative parser extracted {len(narrative_edges)} relationships from text")
+                    logger.info(f"Narrative parser extracted {len(narrative_edges)} relationships from text")
                 except Exception as e:
                     logger.warning(f"Narrative relationship extraction failed: {e}")
         
@@ -127,7 +127,7 @@ class NormalizationService:
                     seen.add(key)
                     unique_edges.append(edge)
             edges = unique_edges
-            logger.info(f"✅ Combined edges: {len(edges)} total (including {len(narrative_edges)} from narrative)")
+            logger.info(f"Combined edges: {len(edges)} total (including {len(narrative_edges)} from narrative)")
         
         logger.info(
             f"Normalized graph: {len(entities)} entities, {len(edges)} edges"
@@ -151,12 +151,12 @@ class NormalizationService:
         entities = []
         # Try multiple locations for markdown (different ADE output formats)
         markdown = ade_output.get("markdown") or ade_output.get("metadata", {}).get("markdown", "")
-        logger.info(f"🔍 DEBUG ade_output keys: {list(ade_output.keys())}")
+        logger.info(f"DEBUG ade_output keys: {list(ade_output.keys())}")
         if "metadata" in ade_output:
-            logger.info(f"🔍 DEBUG metadata keys: {list(ade_output['metadata'].keys())}")
+            logger.info(f"DEBUG metadata keys: {list(ade_output['metadata'].keys())}")
         
         # STEP 1: Try ADE schema extraction FIRST (with new model)
-        logger.info("🎯 PRIMARY EXTRACTION: Trying ADE with new model (extract-20251024)")
+        logger.info("PRIMARY EXTRACTION: Trying ADE with new model (extract-20251024)")
         
         ade_entities = await self._extract_entities_from_ade_schema(
             ade_output,
@@ -164,7 +164,7 @@ class NormalizationService:
             graph_id
         )
         
-        logger.info(f"📊 ADE extracted {len(ade_entities)} entities")
+        logger.info(f"ADE extracted {len(ade_entities)} entities")
         
         # Always compute deterministic parser entities for enrichment
         deterministic_entities = await self._extract_entities_from_tables(
@@ -218,12 +218,12 @@ class NormalizationService:
                     county_value = det_props.get("county") or det_props.get("column")
                     if county_value:
                         entity.properties["county"] = county_value
-                        logger.debug(f"✅ Merged county '{county_value}' for {entity.name}")
+                        logger.debug(f"Merged county '{county_value}' for {entity.name}")
                     elif city_name:
                         county_from_md = county_lookup.get(str(city_name))
                         if county_from_md:
                             entity.properties["county"] = county_from_md
-                            logger.debug(f"✅ Merged county '{county_from_md}' from markdown for {entity.name}")
+                            logger.debug(f"Merged county '{county_from_md}' from markdown for {entity.name}")
                 
                 # Merge other deterministic properties if not already present
                 for key, value in det_props.items():
@@ -235,18 +235,18 @@ class NormalizationService:
         
         # Check if ADE extraction was successful
         if len(ade_entities) >= 20:  # Good extraction threshold
-            logger.info(f"✅ Using ADE extraction: {len(ade_entities)} entities (good quality)")
+            logger.info(f"Using ADE extraction: {len(ade_entities)} entities (good quality)")
             return merge_with_deterministic(ade_entities)
         
         # STEP 2: Fallback to deterministic parser
-        logger.warning(f"⚠️ ADE only extracted {len(ade_entities)} entities, falling back to deterministic parser")
-        logger.info("🔄 FALLBACK: Using deterministic parser")
+        logger.warning(f"ADE only extracted {len(ade_entities)} entities, falling back to deterministic parser")
+        logger.info("FALLBACK: Using deterministic parser")
         
         # Detect document type
         if markdown:
             doc_type_info = self.doc_type_detector.detect_document_type(markdown)
             doc_type = doc_type_info["type"]
-            logger.info(f"📋 Document type: {doc_type} (confidence: {doc_type_info['confidence']:.2f})")
+            logger.info(f"Document type: {doc_type} (confidence: {doc_type_info['confidence']:.2f})")
             
             # Use specialized parser based on document type
             if doc_type == "invoice":
@@ -276,15 +276,15 @@ class NormalizationService:
                 graph_id
             )
         
-        logger.info(f"✅ Deterministic parser extracted {len(entities)} entities")
+        logger.info(f"Deterministic parser extracted {len(entities)} entities")
         
         # STEP 3: If both ADE and deterministic gave very few entities, try narrative parser
         # Threshold: < 5 entities suggests a narrative document rather than structured data
         total_entities = max(len(entities), len(ade_entities))
-        logger.info(f"🔍 DEBUG: entities={len(entities)}, ade_entities={len(ade_entities)}, markdown={len(markdown) if markdown else 0} chars")
+        logger.info(f"DEBUG: entities={len(entities)}, ade_entities={len(ade_entities)}, markdown={len(markdown) if markdown else 0} chars")
         if total_entities < 5 and len(markdown) > 10000:  # Long narrative document with few structured entities
-            logger.warning(f"⚠️ Only {total_entities} entities found from structured extraction, but document has {len(markdown)} chars")
-            logger.info("🔄 NARRATIVE DOCUMENT DETECTED: Using LLM-based narrative parser")
+            logger.warning(f"Only {total_entities} entities found from structured extraction, but document has {len(markdown)} chars")
+            logger.info("NARRATIVE DOCUMENT DETECTED: Using LLM-based narrative parser")
             
             # Use the advanced LLM-based extraction (extracts entities + relationships)
             # Store relationships too so we don't have to extract twice
@@ -292,17 +292,17 @@ class NormalizationService:
                 narrative_entities, narrative_relationships = await self.narrative_parser.extract_entities_and_relationships_from_chunks(
                     markdown, document_id, graph_id
                 )
-                logger.info(f"✅ Narrative parser (LLM) extracted {len(narrative_entities)} entities and {len(narrative_relationships)} relationships")
+                logger.info(f"Narrative parser (LLM) extracted {len(narrative_entities)} entities and {len(narrative_relationships)} relationships")
             except Exception as e:
                 logger.warning(f"LLM narrative parser failed: {e}, trying regex fallback")
                 # Fallback to regex-based extraction
                 narrative_entities = self.narrative_parser.extract_entities_from_narrative(
                     markdown, document_id, graph_id
                 )
-                logger.info(f"✅ Narrative parser (regex) extracted {len(narrative_entities)} entities")
+                logger.info(f"Narrative parser (regex) extracted {len(narrative_entities)} entities")
             
             if len(narrative_entities) > 0:
-                logger.info(f"📊 Using narrative parser: {len(narrative_entities)} entities")
+                logger.info(f"Using narrative parser: {len(narrative_entities)} entities")
                 # Store narrative relationships to use later (avoid re-extraction)
                 merged_entities = merge_with_deterministic(narrative_entities)
                 # Attach the relationships as a temporary attribute
@@ -313,10 +313,10 @@ class NormalizationService:
         
         # Use whichever gave us more entities
         if len(entities) > len(ade_entities):
-            logger.info(f"📊 Using deterministic parser: {len(entities)} entities (better than ADE's {len(ade_entities)})")
+            logger.info(f"Using deterministic parser: {len(entities)} entities (better than ADE's {len(ade_entities)})")
             return merge_with_deterministic(entities)
         else:
-            logger.info(f"📊 Using ADE extraction: {len(ade_entities)} entities (better than deterministic's {len(entities)})")
+            logger.info(f"Using ADE extraction: {len(ade_entities)} entities (better than deterministic's {len(entities)})")
             return merge_with_deterministic(ade_entities)
     
     async def _extract_entities_from_ade_schema(
@@ -426,7 +426,7 @@ class NormalizationService:
         if not entities:
             return []
         
-        logger.info(f"🔗 Creating relationships for {len(entities)} entities...")
+        logger.info(f"Creating relationships for {len(entities)} entities...")
         
         # Strategy 1: LLM-based relationship detection (intelligent, adaptive)
         # Skip for narrative documents (already have context-based relationships)
@@ -441,7 +441,7 @@ class NormalizationService:
                     graph_id=graph_id,
                     chunk_size=20  # Process 20 entities at a time
                 )
-                logger.info(f"✅ LLM detected {len(llm_edges)} relationships")
+                logger.info(f"LLM detected {len(llm_edges)} relationships")
             except Exception as e:
                 logger.warning(f"LLM relationship detection failed: {e}, using fallback")
                 llm_edges = []
@@ -458,7 +458,7 @@ class NormalizationService:
             existing_narrative_edges=existing_narrative_edges  # Pass separately to avoid duplicates
         )
         
-        logger.info(f"✅ Total relationships: {len(all_edges)}")
+        logger.info(f"Total relationships: {len(all_edges)}")
         return all_edges
     
     async def _create_property_based_edges(
@@ -909,7 +909,7 @@ Provide the normalization strategy in JSON format."""
             else:
                 strategy = json.loads(llm_response.strip())
             
-            logger.info(f"✅ LLM normalization strategy: {strategy.get('entity_type')} using {strategy.get('name_field')}")
+            logger.info(f"LLM normalization strategy: {strategy.get('entity_type')} using {strategy.get('name_field')}")
             
             # Apply the strategy
             return await self._apply_normalization_strategy(
@@ -961,7 +961,7 @@ Provide the normalization strategy in JSON format."""
             entities.append(entity)
             entity_map[str(entity_name)] = entity
         
-        logger.info(f"✅ Created {len(entities)} {entity_type} entities")
+        logger.info(f"Created {len(entities)} {entity_type} entities")
         return entities
     
     def _fallback_array_processing(
@@ -1019,7 +1019,7 @@ Provide the normalization strategy in JSON format."""
             entities.append(entity)
             entity_map[str(entity_name)] = entity
         
-        logger.info(f"✅ Fallback: Created {len(entities)} {entity_type} entities from {key}")
+        logger.info(f"Fallback: Created {len(entities)} {entity_type} entities from {key}")
         return entities
     
     async def _extract_entities_from_table(
@@ -1137,10 +1137,10 @@ Provide the normalization strategy in JSON format."""
                 )
                 entities.append(entity)
             
-            logger.info(f"✅ Table parser extracted {len(entities)} entities from markdown")
+            logger.info(f"Table parser extracted {len(entities)} entities from markdown")
             
         except Exception as e:
-            logger.error(f"❌ Table parsing failed: {e}", exc_info=True)
+            logger.error(f"Table parsing failed: {e}", exc_info=True)
         
         return entities
 

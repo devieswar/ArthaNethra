@@ -62,7 +62,7 @@ class RelationshipDetector:
         # Chunk entities for efficient processing
         chunks = self._chunk_entities(entities, chunk_size)
         
-        logger.info(f"🔗 Detecting relationships across {len(chunks)} chunks ({len(entities)} entities)")
+        logger.info(f"Detecting relationships across {len(chunks)} chunks ({len(entities)} entities)")
         
         for i, chunk in enumerate(chunks):
             try:
@@ -73,7 +73,7 @@ class RelationshipDetector:
                 )
                 
                 all_edges.extend(chunk_edges)
-                logger.info(f"✅ Chunk {i+1}: Found {len(chunk_edges)} relationships")
+                logger.info(f"Chunk {i+1}: Found {len(chunk_edges)} relationships")
                 
             except Exception as e:
                 logger.warning(f"Failed to process chunk {i+1}: {e}")
@@ -82,7 +82,7 @@ class RelationshipDetector:
         # Deduplicate edges
         all_edges = self._deduplicate_edges(all_edges)
         
-        logger.info(f"✅ Total relationships detected: {len(all_edges)}")
+        logger.info(f"Total relationships detected: {len(all_edges)}")
         return all_edges
     
     def _chunk_entities(self, entities: List[Entity], chunk_size: int) -> List[List[Entity]]:
@@ -226,7 +226,7 @@ Provide relationships in JSON format."""
                 )
                 edges.append(edge)
             
-            logger.info(f"🔗 LLM detected {len(edges)} relationships (from {len(relationships)} candidates)")
+            logger.info(f"LLM detected {len(edges)} relationships (from {len(relationships)} candidates)")
             return edges
             
         except Exception as e:
@@ -375,9 +375,9 @@ Provide relationships in JSON format."""
         heuristic_edges.extend(property_edges)
         
         if len(property_edges) > 0:
-            logger.info(f"➕ Added {len(property_edges)} property-based relationships")
+            logger.info(f"Added {len(property_edges)} property-based relationships")
         
-        logger.info(f"➕ Added {len(heuristic_edges)} heuristic edges total")
+        logger.info(f"Added {len(heuristic_edges)} heuristic edges total")
         
         # Combine and deduplicate
         all_edges = llm_edges + heuristic_edges
@@ -427,7 +427,7 @@ Provide relationships in JSON format."""
                 if len(group_entities) < 2:
                     continue
                 
-                logger.debug(f"🔗 Found {len(group_entities)} entities with {prop_name}='{prop_value}'")
+                logger.debug(f"Found {len(group_entities)} entities with {prop_name}='{prop_value}'")
                 
                 for i, source in enumerate(group_entities):
                     for target in group_entities[i + 1:]:

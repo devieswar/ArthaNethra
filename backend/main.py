@@ -54,7 +54,7 @@ persistence_service = PersistenceService()
 async def lifespan(app: FastAPI):
     """Application lifespan events - handles startup and shutdown"""
     # Startup
-    logger.info("🚀 Starting ArthaNethra API")
+    logger.info("Starting ArthaNethra API")
     
     # Load persisted state from disk
     global documents_store, graphs_store, entities_store, chat_sessions_store, chat_messages_store, jobs_store, risks_store
@@ -96,11 +96,11 @@ async def lifespan(app: FastAPI):
                     "metadata": {}
                 }
         
-        logger.info(f"📂 Restored state: {len(docs)} documents, {len(graphs_store)} graphs, {sum(len(e) for e in entities.values())} entities, {len(sessions)} sessions, {len(risks)} risk graphs")
+        logger.info(f"Restored state: {len(docs)} documents, {len(graphs_store)} graphs, {sum(len(e) for e in entities.values())} entities, {len(sessions)} sessions, {len(risks)} risk graphs")
         
         # Skip auto-indexing on startup (entities already in Weaviate/Neo4j volumes)
         # Only index when new documents are uploaded
-        logger.info(f"📊 Skipping auto-index: {len(entities_store)} graphs already persisted in Weaviate/Neo4j")
+        logger.info(f"Skipping auto-index: {len(entities_store)} graphs already persisted in Weaviate/Neo4j")
         
     except Exception as e:
         logger.warning(f"Could not load persisted state: {e}")
@@ -108,7 +108,7 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown
-    logger.info("👋 Shutting down ArthaNethra API")
+    logger.info("Shutting down ArthaNethra API")
     
     # Save state to disk before shutdown
     try:
@@ -120,7 +120,7 @@ async def lifespan(app: FastAPI):
             chat_messages_store,
             risks_store
         )
-        logger.info("💾 State saved to disk")
+        logger.info("State saved to disk")
     except Exception as e:
         logger.error(f"Failed to save state: {e}")
     
@@ -565,7 +565,7 @@ async def normalize_to_graph(document_id: str):
                     # Save risks to disk immediately
                     try:
                         persistence_service.save_risks(risks_store)
-                        logger.info(f"💾 Saved {len(all_risks)} risks to disk")
+                        logger.info(f"Saved {len(all_risks)} risks to disk")
                     except Exception as save_error:
                         logger.error(f"Failed to save risks: {save_error}")
                 else:
@@ -580,7 +580,7 @@ async def normalize_to_graph(document_id: str):
                 persistence_service.save_graphs(graphs_store)
                 persistence_service.save_entities(entities_store)
                 persistence_service.save_risks(risks_store)
-                logger.debug("💾 Persisted updated document and graph state after normalization")
+                logger.debug("Persisted updated document and graph state after normalization")
             except Exception as persist_error:
                 logger.error(f"Failed to persist updated normalization state: {persist_error}")
         
@@ -1184,7 +1184,7 @@ async def create_chat_session(name: str = "New Chat") -> Dict[str, Any]:
     }
     chat_sessions_store[session_id] = session
     chat_messages_store[session_id] = []
-    logger.info(f"📝 Created chat session: {session_id}")
+    logger.info(f"Created chat session: {session_id}")
     return session
 
 
@@ -1230,7 +1230,7 @@ async def delete_chat_session(session_id: str):
     if session_id in chat_messages_store:
         del chat_messages_store[session_id]
     
-    logger.info(f"🗑️  Deleted chat session: {session_id}")
+    logger.info(f"Deleted chat session: {session_id}")
     return {"message": "Chat session deleted"}
 
 
@@ -1474,7 +1474,7 @@ async def get_risks_by_document(document_id: str) -> Dict[str, Any]:
     risks = risks_store.get(graph_id, [])
     summary = risk_detection_service.calculate_risk_summary(risks)
     
-    logger.info(f"📊 Fetched {len(risks)} risks for document {document_id} (graph: {graph_id})")
+    logger.info(f"Fetched {len(risks)} risks for document {document_id} (graph: {graph_id})")
     
     return {
         "document_id": document_id,
@@ -1520,7 +1520,7 @@ async def analyze_risks(graph_id: str, run_llm: bool = True) -> Dict[str, Any]:
     # Save risks to disk immediately
     try:
         persistence_service.save_risks(risks_store)
-        logger.info(f"💾 Saved {len(all_risks)} risks to disk")
+        logger.info(f"Saved {len(all_risks)} risks to disk")
     except Exception as save_error:
         logger.error(f"Failed to save risks: {save_error}")
     
