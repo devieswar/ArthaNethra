@@ -70,7 +70,7 @@ class ChatbotService:
                     body=json.dumps(request_body)
                 )
                 response_body = json.loads(response['body'].read())
-                logger.info(f"✅ Success with model: {model_id}")
+                logger.info(f"Success with model: {model_id}")
                 return response_body
                 
             except Exception as e:
@@ -410,6 +410,7 @@ IMPORTANT INSTRUCTIONS:
 - After receiving document_search results, use them to formulate your answer
 - If tool returns 0 results, say something natural like: "I didn't find any information about this in the uploaded documents"
 - When metrics return a "message" field, translate it to natural language (don't say "the metric returned a message")
+- When responding to the analyst, speak in final conclusions. Do NOT narrate internal steps like "I'll search" or "Let me check"; go straight to the findings and evidence.
 - Extract property names from the question using EXACT field names:
   * "cash" or "cash balance" → use "cash_and_cash_equivalents"
   * "inventory for resale" → use "inventory_held_for_resale"  
@@ -491,7 +492,7 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
             
             while iteration < max_iterations:
                 iteration += 1
-                logger.info(f"🔄 Tool execution loop iteration {iteration}/{max_iterations}")
+                logger.info(f"Tool execution loop iteration {iteration}/{max_iterations}")
                 
                 # Build request with current conversation state
                 request_body = {
@@ -555,8 +556,8 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
                     # Log tool_use IDs for debugging
                     tool_use_ids = [block["id"] for block in content_blocks if block["type"] == "tool_use"]
                     tool_result_ids = [block["tool_use_id"] for block in tool_result_content_blocks]
-                    logger.info(f"🔧 Tool use IDs: {tool_use_ids}")
-                    logger.info(f"🔧 Tool result IDs: {tool_result_ids}")
+                    logger.info(f"Tool use IDs: {tool_use_ids}")
+                    logger.info(f"Tool result IDs: {tool_result_ids}")
                     
                     if set(tool_use_ids) != set(tool_result_ids):
                         logger.error(f"❌ MISMATCH: tool_use IDs don't match tool_result IDs!")
@@ -573,8 +574,8 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
                         "role": "user",
                         "content": tool_result_content_blocks
                     })
-                    logger.info(f"✅ Executed {len(tool_result_content_blocks)} tools, continuing to next iteration")
-                    logger.info(f"📝 Messages array now has {len(messages)} messages")
+                    logger.info(f"Executed {len(tool_result_content_blocks)} tools, continuing to next iteration")
+                    logger.info(f"Messages array now has {len(messages)} messages")
                     # Log the structure for debugging
                     for i, msg in enumerate(messages):
                         role = msg.get("role")
@@ -583,7 +584,7 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
                     # Continue loop to let AI process tool results
                 else:
                     # No more tool calls, we're done
-                    logger.info(f"✅ No more tool calls, conversation complete after {iteration} iterations")
+                    logger.info(f"No more tool calls, conversation complete after {iteration} iterations")
                     break
         
         except Exception as e:
@@ -776,7 +777,7 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
                         chunk for chunk in chunks
                         if chunk.get("document_id") in document_ids
                     ]
-                    logger.info(f"🔍 Filtered document_search chunks: {original_count} -> {len(chunks)} (document_ids: {document_ids})")
+                    logger.info(f"Filtered document_search chunks: {original_count} -> {len(chunks)} (document_ids: {document_ids})")
                 
                 return {
                     "query": query,
@@ -852,7 +853,7 @@ Keep it under 200 words and professional."""
         direction = params.get("direction", "both")
         depth = min(params.get("depth", 1), 3)  # Cap at 3 hops
         
-        logger.info(f"🔍 Graph traverse: {entity_name} | type: {relationship_type} | direction: {direction} | depth: {depth}")
+        logger.info(f"Graph traverse: {entity_name} | type: {relationship_type} | direction: {direction} | depth: {depth}")
         
         # Build Cypher query based on direction
         if direction == "outgoing":
@@ -899,7 +900,7 @@ Keep it under 200 words and professional."""
                         "distance": record["distance"]
                     })
                 
-                logger.info(f"✅ Found {len(connected_entities)} connected entities")
+                logger.info(f"Found {len(connected_entities)} connected entities")
                 
                 return {
                     "starting_entity": entity_name,
@@ -923,7 +924,7 @@ Keep it under 200 words and professional."""
         to_entity = params["to_entity"]
         max_depth = min(params.get("max_depth", 5), 10)  # Cap at 10 hops
         
-        logger.info(f"🔍 Finding path: {from_entity} → {to_entity} (max depth: {max_depth})")
+        logger.info(f"Finding path: {from_entity} -> {to_entity} (max depth: {max_depth})")
 
         try:
             with self.indexing_service.neo4j_driver.session() as session:
@@ -1012,7 +1013,7 @@ Keep it under 200 words and professional."""
                         "properties": json.loads(rel["properties"]) if rel["properties"] else {}
                     })
                 
-                logger.info(f"✅ Found path with {record['path_length']} hops")
+                logger.info(f"Found path with {record['path_length']} hops")
                 
                 return {
                     "from": from_entity,
@@ -1036,7 +1037,7 @@ Keep it under 200 words and professional."""
         entity_type = params.get("entity_type", "")
         min_connections = params.get("min_connections", 1)
         
-        logger.info(f"🔍 Pattern search: {pattern_description} | type: {entity_type} | min connections: {min_connections}")
+        logger.info(f"Pattern search: {pattern_description} | type: {entity_type} | min connections: {min_connections}")
         
         # Build type filter
         type_filter = f"AND e.type = '{entity_type}'" if entity_type else ""
@@ -1074,7 +1075,7 @@ Keep it under 200 words and professional."""
                         "connected_to": record["connected_to"][:10]  # Limit to first 10
                     })
                 
-                logger.info(f"✅ Found {len(matches)} entities matching pattern")
+                logger.info(f"Found {len(matches)} entities matching pattern")
                 
                 return {
                     "pattern": pattern_description,
@@ -1151,7 +1152,7 @@ Keep it under 200 words and professional."""
         if document_ids and len(document_ids) > 0:
             doc_list = "', '".join(document_ids)
             document_filter = f"AND e.documentId IN ['{doc_list}']"
-            logger.info(f"🔍 Filtering entities by document_ids: {document_ids}")
+            logger.info(f"Filtering entities by document_ids: {document_ids}")
         
         type_filter = ""
         if normalized_types:

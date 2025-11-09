@@ -2,16 +2,11 @@
       
       <!-- Header with Branding -->
       <header class="bg-white shadow-sm border-b border-gray-200">
-        <div class="px-6 py-4">
-          <div class="flex items-center space-x-3">
-            <div class="h-10 w-10 bg-gradient-to-br from-primary-600 to-primary-700 rounded-lg flex items-center justify-center shadow-md">
-              <span class="text-white font-bold text-xl">AN</span>
-            </div>
-            <div>
-              <h1 class="text-2xl font-bold text-gray-900">ArthaNethra</h1>
-              <p class="text-xs text-gray-500">AI Financial Risk Investigator</p>
-            </div>
-          </div>
+        <div class="flex justify-start">
+          <img
+            src="assets/arthanetra_logo.png"
+            alt="ArthaNethra logo"
+            class="h-20 w-48 object-contain pl-4" />
         </div>
       </header>
 
@@ -40,7 +35,12 @@
                [class.border-primary-600]="currentSession?.id === session.id"
                [class.shadow-sm]="currentSession?.id === session.id"
                class="px-3 py-3 border-b border-gray-100 hover:bg-gray-50 cursor-pointer transition-all duration-150 group relative">
-            <div class="flex items-start justify-between" (click)="selectSession(session)">
+            <div class="flex items-start justify-between"
+                 role="button"
+                 tabindex="0"
+                 (click)="selectSession(session)"
+                 (keydown.enter)="selectSession(session)"
+                 (keydown.space)="selectSession(session)">
               <div class="flex-1 min-w-0 pr-2">
                 <!-- Chat Icon Avatar -->
                 <div class="flex items-center gap-2 mb-2">
@@ -684,8 +684,19 @@
       <!-- Available Documents Modal -->
       <div *ngIf="showAvailableDocuments" 
            class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 animate-fadeIn"
-           (click)="showAvailableDocuments = false">
-        <div class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[80vh] flex flex-col animate-fadeIn" (click)="$event.stopPropagation()">
+           role="button"
+           tabindex="0"
+           (click)="showAvailableDocuments = false"
+           (keydown.enter)="showAvailableDocuments = false"
+           (keydown.space)="showAvailableDocuments = false"
+           (keydown.escape)="showAvailableDocuments = false">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[80vh] flex flex-col animate-fadeIn"
+             role="dialog"
+             aria-modal="true"
+             tabindex="-1"
+             (click)="$event.stopPropagation()"
+             (keydown.enter)="$event.stopPropagation()"
+             (keydown.space)="$event.stopPropagation()">
           <!-- Header -->
           <div class="bg-gradient-to-r from-emerald-600 to-teal-700 text-white px-6 py-5 rounded-t-2xl flex items-center justify-between shadow-lg">
             <div class="flex items-center gap-3">

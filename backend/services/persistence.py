@@ -35,7 +35,7 @@ class PersistenceService:
         self.chat_messages_file = self.data_dir / "chat_messages.json"
         self.risks_file = self.data_dir / "risks.json"
         
-        logger.info(f"💾 Persistence service initialized at: {self.data_dir}")
+        logger.info(f"Persistence service initialized at: {self.data_dir}")
     
     # ==================== SAVE OPERATIONS ====================
     
@@ -196,7 +196,7 @@ class PersistenceService:
         risks_store: Dict[str, List[Any]] = None
     ) -> None:
         """Save all stores to disk"""
-        logger.info("💾 Saving all state to disk...")
+        logger.info("Saving all state to disk...")
         self.save_documents(documents_store)
         self.save_graphs(graphs_store)
         self.save_entities(entities_store)
@@ -206,7 +206,7 @@ class PersistenceService:
             self.save_chat_messages(chat_messages_store)
         if risks_store is not None:
             self.save_risks(risks_store)
-        logger.info("✅ All state saved to disk")
+        logger.info("All state saved to disk")
     
     # ==================== LOAD OPERATIONS ====================
     
@@ -245,7 +245,7 @@ class PersistenceService:
                 doc.confidence_score = doc_data.get("confidence_score")
                 documents[doc_id] = doc
             
-            logger.info(f"📂 Loaded {len(documents)} documents from disk")
+            logger.info(f"Loaded {len(documents)} documents from disk")
             return documents
         except Exception as e:
             logger.error(f"Failed to load documents: {e}")
@@ -303,7 +303,7 @@ class PersistenceService:
                     "metadata": graph_data.get("metadata", {})
                 }
             
-            logger.info(f"📂 Loaded {len(graphs)} graphs from disk")
+            logger.info(f"Loaded {len(graphs)} graphs from disk")
             return graphs
         except Exception as e:
             logger.error(f"Failed to load graphs: {e}")
@@ -336,7 +336,7 @@ class PersistenceService:
                     entities.append(entity)
                 entities_store[graph_id] = entities
             
-            logger.info(f"📂 Loaded entities for {len(entities_store)} graphs from disk")
+            logger.info(f"Loaded entities for {len(entities_store)} graphs from disk")
             return entities_store
         except Exception as e:
             logger.error(f"Failed to load entities: {e}")
@@ -352,7 +352,7 @@ class PersistenceService:
             with open(self.chat_sessions_file, 'r') as f:
                 data = json.load(f)
             
-            logger.info(f"📂 Loaded {len(data)} chat sessions from disk")
+            logger.info(f"Loaded {len(data)} chat sessions from disk")
             return data
         except Exception as e:
             logger.error(f"Failed to load chat sessions: {e}")
@@ -368,7 +368,7 @@ class PersistenceService:
             with open(self.chat_messages_file, 'r') as f:
                 data = json.load(f)
             
-            logger.info(f"📂 Loaded chat messages for {len(data)} sessions from disk")
+            logger.info(f"Loaded chat messages for {len(data)} sessions from disk")
             return data
         except Exception as e:
             logger.error(f"Failed to load chat messages: {e}")
@@ -410,7 +410,7 @@ class PersistenceService:
                         risks.append(risk_data)
                 risks_store[graph_id] = risks
             
-            logger.info(f"📂 Loaded risks for {len(risks_store)} graphs from disk")
+            logger.info(f"Loaded risks for {len(risks_store)} graphs from disk")
             return risks_store
         except Exception as e:
             logger.error(f"Failed to load risks: {e}")
@@ -418,14 +418,14 @@ class PersistenceService:
     
     def load_all(self) -> tuple[Dict[str, Document], Dict[str, Dict[str, Any]], Dict[str, List[Entity]], Dict[str, Any], Dict[str, List[Any]], Dict[str, List[Any]]]:
         """Load all stores from disk"""
-        logger.info("📂 Loading all state from disk...")
+        logger.info("Loading all state from disk...")
         documents = self.load_documents()
         graphs = self.load_graphs()
         entities = self.load_entities()
         chat_sessions = self.load_chat_sessions()
         chat_messages = self.load_chat_messages()
         risks = self.load_risks()
-        logger.info(f"✅ Loaded state: {len(documents)} docs, {len(graphs)} graphs, {len(chat_sessions)} sessions, {len(risks)} risk graphs")
+        logger.info(f"Loaded state: {len(documents)} docs, {len(graphs)} graphs, {len(chat_sessions)} sessions, {len(risks)} risk graphs")
         return documents, graphs, entities, chat_sessions, chat_messages, risks
     
     # ==================== UTILITY OPERATIONS ====================

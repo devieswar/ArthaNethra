@@ -124,16 +124,16 @@ class ExtractionService:
             JSON Schema dict optimized for the document structure
         """
         try:
-            logger.info(f"🔍 DETERMINISTIC SCHEMA ANALYSIS - Starting...")
-            logger.info(f"📄 Markdown length: {len(markdown)} chars")
+            logger.info(f"DETERMINISTIC SCHEMA ANALYSIS - Starting...")
+            logger.info(f"Markdown length: {len(markdown)} chars")
             
             # Use deterministic analyzer to understand structure
-            logger.info("🔧 Calling markdown analyzer...")
+            logger.info("Calling markdown analyzer...")
             schema = self.schema_analyzer.analyze_and_generate_schema(markdown)
-            logger.info(f"✅ Schema analyzer returned schema with {len(schema.get('properties', {}))} properties")
+            logger.info(f"Schema analyzer returned schema with {len(schema.get('properties', {}))} properties")
             
             # Log the generated schema
-            logger.info(f"✨ SCHEMA GENERATED:")
+            logger.info(f"SCHEMA GENERATED:")
             logger.info(f"{'='*60}")
             logger.info(json.dumps(schema, indent=2))
             logger.info(f"{'='*60}")
@@ -151,7 +151,7 @@ class ExtractionService:
                         "timestamp": timestamp,
                         "method": "deterministic_analysis"
                     }, sf, indent=2)
-                logger.info(f"💾 Schema saved to: {schema_file}")
+                logger.info(f"Schema saved to: {schema_file}")
             except Exception as e:
                 logger.warning(f"Could not save schema: {e}")
             
@@ -369,9 +369,9 @@ class ExtractionService:
         # Log and save parsed markdown for inspection
         if "markdown" in result:
             markdown_content = result["markdown"]
-            logger.info(f"📄 ADE PARSE SUCCESS for '{filename}'")
-            logger.info(f"📊 Markdown length: {len(markdown_content)} characters")
-            logger.info(f"📝 First 500 chars of markdown:\n{'='*60}\n{markdown_content[:500]}...\n{'='*60}")
+            logger.info(f"ADE PARSE SUCCESS for '{filename}'")
+            logger.info(f"Markdown length: {len(markdown_content)} characters")
+            logger.info(f"First 500 chars of markdown:\n{'='*60}\n{markdown_content[:500]}...\n{'='*60}")
             
             # Save full markdown to /tmp for inspection
             safe_filename = filename.replace("/", "_").replace(" ", "_")
@@ -384,7 +384,7 @@ class ExtractionService:
                     mf.write(f"**Length:** {len(markdown_content)} characters\n\n")
                     mf.write("---\n\n")
                     mf.write(markdown_content)
-                logger.info(f"💾 Full markdown saved to: {markdown_file}")
+                logger.info(f"Full markdown saved to: {markdown_file}")
             except Exception as e:
                 logger.warning(f"Could not save markdown file: {e}")
         else:
@@ -405,12 +405,12 @@ class ExtractionService:
         used_schema = schema or default_schema
         
         # Log schema being used
-        logger.info(f"🔍 ADE EXTRACT - Using Model: {model}")
-        logger.info(f"🔍 ADE EXTRACT - Using Schema:")
+        logger.info(f"ADE EXTRACT - Using Model: {model}")
+        logger.info(f"ADE EXTRACT - Using Schema:")
         logger.info(f"{'='*60}")
         logger.info(json.dumps(used_schema, indent=2))
         logger.info(f"{'='*60}")
-        logger.info(f"📄 Markdown input length: {len(markdown)} characters")
+        logger.info(f"Markdown input length: {len(markdown)} characters")
         
         data = {
             "schema": json.dumps(used_schema),  # send schema as JSON string per docs
@@ -421,9 +421,9 @@ class ExtractionService:
         result = resp.json()
         
         # Log extraction results
-        logger.info(f"✅ ADE EXTRACT SUCCESS")
-        logger.info(f"📦 Extraction result keys: {list(result.keys())}")
-        logger.info(f"📊 Full extraction result:")
+        logger.info(f"ADE EXTRACT SUCCESS")
+        logger.info(f"Extraction result keys: {list(result.keys())}")
+        logger.info(f"Full extraction result:")
         logger.info(f"{'='*60}")
         logger.info(json.dumps(result, indent=2))
         logger.info(f"{'='*60}")
@@ -440,7 +440,7 @@ class ExtractionService:
                     "extraction_result": result,
                     "timestamp": timestamp
                 }, rf, indent=2)
-            logger.info(f"💾 Extraction result saved to: {result_file}")
+            logger.info(f"Extraction result saved to: {result_file}")
         except Exception as e:
             logger.warning(f"Could not save extraction result: {e}")
         

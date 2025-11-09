@@ -25,7 +25,7 @@ class MarkdownSchemaAnalyzer:
         Returns:
             JSON schema optimized for the content
         """
-        logger.info(f"📊 Analyzing markdown structure ({len(markdown)} chars)")
+        logger.info(f"Analyzing markdown structure ({len(markdown)} chars)")
         
         # Detect document type and structure
         has_html_tables = "<table" in markdown
@@ -33,16 +33,16 @@ class MarkdownSchemaAnalyzer:
         
         # Extract table structure if present
         if has_html_tables:
-            logger.info("✅ Detected HTML tables in markdown")
+            logger.info("Detected HTML tables in markdown")
             schema = self._generate_schema_from_html_tables(markdown)
         elif has_pipe_tables:
-            logger.info("✅ Detected pipe-delimited tables in markdown")
+            logger.info("Detected pipe-delimited tables in markdown")
             schema = self._generate_schema_from_pipe_tables(markdown)
         else:
             logger.info("ℹ️ No tables detected, using generic schema")
             schema = self._generate_generic_schema(markdown)
         
-        logger.info(f"✨ Generated schema with {len(schema.get('properties', {}))} top-level properties")
+        logger.info(f"Generated schema with {len(schema.get('properties', {}))} top-level properties")
         return schema
     
     def _detect_pipe_tables(self, markdown: str) -> bool:
@@ -82,7 +82,7 @@ class MarkdownSchemaAnalyzer:
                 logger.warning("⚠️ Could not extract table headers, using generic schema")
                 return self._generate_generic_schema(markdown)
             
-            logger.info(f"📋 Detected {len(all_headers)} columns across {len(tables)} tables: {all_headers[:5]}...")
+            logger.info(f"Detected {len(all_headers)} columns across {len(tables)} tables: {all_headers[:5]}...")
             
             # Generate schema based on all headers
             schema = self._build_schema_from_headers(all_headers)
@@ -228,7 +228,7 @@ class MarkdownSchemaAnalyzer:
                         headers = [h.strip() for h in line.split('|') if h.strip()]
                         headers_snake = [self._to_snake_case(h) for h in headers]
                         
-                        logger.info(f"📋 Detected pipe table with {len(headers_snake)} columns")
+                        logger.info(f"Detected pipe table with {len(headers_snake)} columns")
                         return self._build_schema_from_headers(headers_snake)
             
             return self._generate_generic_schema(markdown)
@@ -239,7 +239,7 @@ class MarkdownSchemaAnalyzer:
     
     def _generate_generic_schema(self, markdown: str) -> Dict[str, Any]:
         """Generate a generic schema for unstructured content"""
-        logger.info("📝 Generating generic schema for unstructured content")
+        logger.info("Generating generic schema for unstructured content")
         
         # Check for common document types
         markdown_lower = markdown.lower()

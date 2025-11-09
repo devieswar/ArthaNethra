@@ -31,7 +31,7 @@ class MarkdownTableParser:
         Returns:
             Dict with extracted entities in structured format
         """
-        logger.info(f"📊 Parsing markdown tables deterministically ({len(markdown)} chars)")
+        logger.info(f"Parsing markdown tables deterministically ({len(markdown)} chars)")
         
         entities = []
         
@@ -44,7 +44,7 @@ class MarkdownTableParser:
             pipe_entities = self._parse_pipe_tables(markdown, max_entities - len(entities))
             entities.extend(pipe_entities)
         
-        logger.info(f"✅ Parsed {len(entities)} entities from markdown tables")
+        logger.info(f"Parsed {len(entities)} entities from markdown tables")
         
         # Save debug output
         import time
@@ -59,7 +59,7 @@ class MarkdownTableParser:
                         "tables_found": "multiple"
                     }
                 }, f, indent=2)
-            logger.info(f"💾 Table extraction result saved to: {debug_path}")
+            logger.info(f"Table extraction result saved to: {debug_path}")
         except Exception as e:
             logger.warning(f"Could not save debug output: {e}")
         
@@ -137,7 +137,7 @@ class MarkdownTableParser:
                 logger.warning(f"No headers found in table {table_idx}")
                 return entities
             
-            logger.info(f"📊 Table {table_idx}: Found {len(headers)} columns (from row {best_row_idx})")
+            logger.info(f"Table {table_idx}: Found {len(headers)} columns (from row {best_row_idx})")
             logger.info(f"   Headers: {headers[:10]}{'...' if len(headers) > 10 else ''}")
             
             # Extract rows (skip header rows - start after the best header row)
@@ -260,7 +260,7 @@ class MarkdownTableParser:
                 return None
             
             # Summary log at INFO level
-            logger.info(f"📦 Entity '{entity_name[:30]}': {len(properties)} properties extracted from {len(headers)} columns")
+            logger.info(f"Entity '{entity_name[:30]}': {len(properties)} properties extracted from {len(headers)} columns")
             
             return {
                 "type": entity_type,

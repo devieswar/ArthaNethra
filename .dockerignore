@@ -13,6 +13,7 @@
 **/.env
 **/.DS_Store
 **/venv
+**/.venv
 **/env
 **/.coverage
 **/.pytest_cache

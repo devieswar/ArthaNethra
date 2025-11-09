@@ -39,7 +39,7 @@ class ContractParser:
             - Party entities (companies/people)
             - Clause entities (terms, obligations)
         """
-        logger.info("📜 Parsing contract deterministically")
+        logger.info("Parsing contract deterministically")
         
         soup = BeautifulSoup(markdown, 'html.parser')
         text = soup.get_text()
@@ -126,7 +126,7 @@ class ContractParser:
             )
             entities.append(obligation_entity)
         
-        logger.info(f"✅ Extracted {len(entities)} entities from contract")
+        logger.info(f"Extracted {len(entities)} entities from contract")
         return entities
     
     def _extract_contract_metadata(self, text: str) -> Dict[str, Any]:
