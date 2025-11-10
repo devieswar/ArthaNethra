@@ -152,6 +152,8 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
           
           token.attrSet('class', 'citation-link');
           token.attrSet('data-doc-id', docId);
+          token.attrSet('role', 'button');
+          token.attrSet('tabindex', '0');
           
           // Parse page number(s) - take the first page if multiple
           // Only set page if we have valid page data (not 0, not empty)
@@ -162,8 +164,13 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
             
             // Only set page attribute if it's a valid page number (> 0)
             if (!isNaN(pageNum) && pageNum > 0) {
-              token.attrSet('data-page', firstPage);
+              token.attrSet('data-page', pageNum.toString());
+              token.attrSet('title', `Open page ${pageNum}`);
+            } else {
+              token.attrSet('title', 'Open document');
             }
+          } else {
+            token.attrSet('title', 'Open document');
           }
           
           token.attrSet('href', 'javascript:void(0)');
@@ -192,16 +199,18 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
     // Use event delegation to handle dynamically added citation links
     document.addEventListener('click', (event) => {
       const target = event.target as HTMLElement;
-      const citationLink = target.closest('.citation-link');
+      const citationLink = target.closest('.citation-link') || 
+                           (target.classList.contains('citation-link') ? target : null);
       
       if (citationLink) {
         event.preventDefault();
+        event.stopPropagation();
+        
         const docId = citationLink.getAttribute('data-doc-id');
         const pageAttr = citationLink.getAttribute('data-page');
         const page = pageAttr ? parseInt(pageAttr, 10) : undefined;
         
         if (docId) {
-          console.log('Citation clicked, doc ID:', docId, 'page:', page);
           // Run inside Angular zone to trigger change detection
           this.ngZone.run(() => {
             this.openDocumentFromCitation(docId, page);
@@ -212,9 +221,6 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
   }
   
   async openDocumentFromCitation(docId: string, page?: number) {
-    console.log('Available documents:', this.allDocuments.map(d => ({ id: d.id, filename: d.filename })));
-    console.log('🔖 Opening citation - Document ID:', docId, 'Target Page:', page);
-    
     let document = this.allDocuments.find(doc => doc.id === docId);
     
     // If the document is missing locally, refresh document list once
@@ -224,22 +230,17 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
     }
     
     if (!document) {
-      console.error('❌ Document not found after refresh. Looking for ID:', docId);
-      console.error('Available document IDs:', this.allDocuments.map(d => d.id));
       return;
     }
     
     // If the document isn't yet attached to the active session, attach it automatically
     if (this.currentSession && !this.currentSession.document_ids.includes(document.id)) {
-      console.log(`📎 Attaching document ${document.filename} to current session from citation click`);
       await this.addExistingDocument(document);
     }
     
     // Ensure explorer is visible and show the PDF with page navigation
     this.showExplorer = true;
     this.viewDocumentPDF(document, page);
-    
-    console.log(`✅ Opening document from citation: ${document.filename}${page ? ` at page ${page}` : ''}`);
   }
 
   ngOnDestroy() {
@@ -1074,19 +1075,11 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
     this.explorerView = 'pdf';
     this.pdfTargetPage = page; // Store target page for PDF viewer
     this.pdfCitedPages = citedPages || (page ? [page] : []); // Store all cited pages
-    
-    if (page) {
-      console.log(`📄 Navigating to page ${page} in document: ${doc.filename}`);
-      if (citedPages && citedPages.length > 1) {
-        console.log(`📑 Multiple citation pages available: ${citedPages.join(', ')}`);
-      }
-    }
   }
   
   navigateToCitedPage(pageIndex: number) {
     if (pageIndex >= 0 && pageIndex < this.pdfCitedPages.length) {
       this.pdfTargetPage = this.pdfCitedPages[pageIndex];
-      console.log(`📄 Jumping to cited page ${this.pdfTargetPage}`);
     }
   }
   

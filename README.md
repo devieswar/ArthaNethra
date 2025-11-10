@@ -2,7 +2,7 @@
 
 > *"Turning complex financial documents into connected, explainable insights."*
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License](https://img.shields.io/badge/License-All%20Rights%20Reserved-red.svg)](#-license)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![Angular](https://img.shields.io/badge/Angular-19-red.svg)](https://angular.io/)
 [![AWS Bedrock](https://img.shields.io/badge/AWS-Bedrock-orange.svg)](https://aws.amazon.com/bedrock/)
@@ -10,7 +10,7 @@
 
 ## 📺 Demo Video
 
-🎥 **[Watch Full Demo on YouTube](#)** *(Link coming soon)*
+🎥 **[Watch Full Demo on YouTube](https://youtu.be/QdXCNYUUAPg)**
 
 ---
 
@@ -395,7 +395,9 @@ ArthaNethra/
 
 ## 📄 License
 
-MIT License — free to use, modify, and distribute. See [LICENSE](LICENSE) for details.
+**All Rights Reserved** — This software is proprietary and confidential. Unauthorized copying, distribution, modification, or use of this software is strictly prohibited without explicit written permission from the authors.
+
+**Special Grant:** Official judges of the Financial AI Hackathon Championship are granted limited access to use and evaluate this software for judging purposes only.
 
 ---
 Powered by LandingAI ADE and AWS Bedrock
