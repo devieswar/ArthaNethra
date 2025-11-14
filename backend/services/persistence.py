@@ -84,6 +84,8 @@ class PersistenceService:
                             "id": entity.id,
                             "type": entity.type.value if hasattr(entity.type, 'value') else str(entity.type),
                             "name": entity.name,
+                            "display_type": entity.display_type,
+                            "original_type": entity.original_type,
                             "properties": entity.properties,
                             "document_id": entity.document_id,
                             "graph_id": entity.graph_id
@@ -133,6 +135,8 @@ class PersistenceService:
                             "id": entity.id,
                             "type": entity.type.value if hasattr(entity.type, 'value') else str(entity.type),
                             "name": entity.name,
+                            "display_type": entity.display_type,
+                            "original_type": entity.original_type,
                             "properties": entity.properties,
                             "document_id": entity.document_id,
                             "graph_id": entity.graph_id
@@ -273,6 +277,8 @@ class PersistenceService:
                         id=entity_data["id"],
                         type=EntityType(entity_data["type"]),
                         name=entity_data["name"],
+                        display_type=entity_data.get("display_type"),
+                        original_type=entity_data.get("original_type"),
                         properties=entity_data.get("properties", {}),
                         document_id=entity_data.get("document_id", graph_data.get("document_id", "")),
                         graph_id=entity_data.get("graph_id", graph_id)
@@ -329,6 +335,8 @@ class PersistenceService:
                         id=entity_data["id"],
                         type=EntityType(entity_data["type"]),
                         name=entity_data["name"],
+                        display_type=entity_data.get("display_type"),
+                        original_type=entity_data.get("original_type"),
                         properties=entity_data.get("properties", {}),
                         document_id=entity_data.get("document_id", ""),
                         graph_id=entity_data.get("graph_id", graph_id)

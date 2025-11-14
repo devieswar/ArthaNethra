@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, ElementRef, NgZone, OnDestroy, OnInit, Pipe, PipeTransform, ViewChild } from '@angular/core';
+import { Component, ElementRef, NgZone, OnDestroy, OnInit, Pipe, PipeTransform, Renderer2, ViewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml, SafeResourceUrl } from '@angular/platform-browser';
 import { EChartsOption } from 'echarts';
@@ -46,6 +46,7 @@ interface ChatMessage {
     entities: any[];
     relationships: any[];
   };
+  graphUnavailable?: boolean;
 }
 
 interface Document {
@@ -79,6 +80,8 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
   isGraphFullscreen = false;
   isResponseGraphFullscreen = false;
   selectedMessageForGraph: ChatMessage | null = null;
+  responseGraphLoadingMessageId: string | null = null;
+  responseGraphError: string | null = null;
   
   // Sigma graph
   private sigmaInstance: Sigma | null = null;
@@ -106,8 +109,16 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
   // Explorer views
   explorerView: 'list' | 'graph' | 'entities' | 'markdown' | 'risks' | 'pdf' = 'list';
   selectedDocument: Document | null = null;
+  currentGraphDocumentId: string | null = null;
+  allGraphEntities: any[] = [];
+  allGraphEdges: any[] = [];
   graphEntities: any[] = [];
   graphEdges: any[] = [];
+  graphSearchQuery = '';
+  graphSearchMatches = 0;
+  graphSearchActive = false;
+  flaggedEntityIds = new Set<string>(); // Track flagged entities
+  showFlaggedOnly = false; // Filter graph to show only flagged entities
   documentRisks: any[] = [];
   riskSummary: any = null;
   riskChartOptions: EChartsOption = {};
@@ -130,8 +141,23 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
     linkify: true,
     typographer: true
   });
+  private speechRecognition: any = null;
+  isListening = false;
+  voiceSupport = false;
+  isSpeaking = false;
+  speakingMessageId: string | null = null;
+  private preferredVoice?: SpeechSynthesisVoice;
+  private voicesChangedHandler?: () => void;
 
-  constructor(private api: ApiService, private sanitizer: DomSanitizer, private ngZone: NgZone) {
+  private citationClickHandler?: () => void;
+  
+  constructor(
+    private api: ApiService, 
+    private sanitizer: DomSanitizer, 
+    private ngZone: NgZone,
+    private renderer: Renderer2,
+    private elementRef: ElementRef
+  ) {
     // Customize markdown link renderer to handle citations with page numbers
     const defaultRender = this.markdownRenderer.renderer.rules.link_open || 
       ((tokens: any, idx: any, options: any, env: any, self: any) => self.renderToken(tokens, idx, options));
@@ -155,20 +181,27 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
           token.attrSet('role', 'button');
           token.attrSet('tabindex', '0');
           
-          // Parse page number(s) - take the first page if multiple
-          // Only set page if we have valid page data (not 0, not empty)
+          // Parse page number(s) - support multiple pages and store metadata
+          const uniquePages: number[] = [];
+          const addUniquePage = (value: string | number | null | undefined) => {
+            if (value === null || value === undefined) {
+              return;
+            }
+            const num = typeof value === 'number' ? value : parseInt(String(value).trim(), 10);
+            if (!isNaN(num) && num > 0 && !uniquePages.includes(num)) {
+              uniquePages.push(num);
+            }
+          };
+          
           if (pageData && pageData.trim()) {
             const pages = pageData.split(',').map((p: string) => p.trim());
-            const firstPage = pages[0];
-            const pageNum = parseInt(firstPage, 10);
-            
-            // Only set page attribute if it's a valid page number (> 0)
-            if (!isNaN(pageNum) && pageNum > 0) {
-              token.attrSet('data-page', pageNum.toString());
-              token.attrSet('title', `Open page ${pageNum}`);
-            } else {
-              token.attrSet('title', 'Open document');
-            }
+            pages.forEach((p: string) => addUniquePage(p));
+          }
+          
+          if (uniquePages.length > 0) {
+            token.attrSet('data-page', uniquePages[0].toString());
+            token.attrSet('data-pages', uniquePages.join(','));
+            token.attrSet('title', uniquePages.length > 1 ? `Open pages ${uniquePages.join(', ')}` : `Open page ${uniquePages[0]}`);
           } else {
             token.attrSet('title', 'Open document');
           }
@@ -180,6 +213,9 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
       
       return defaultRender(tokens, idx, options, env, self);
     };
+
+    this.initializeSpeechRecognition();
+    this.initializeSpeechSynthesis();
   }
 
   async ngOnInit() {
@@ -196,31 +232,86 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
   }
   
   private setupCitationClickHandler() {
+    // Remove existing handler if any
+    if (this.citationClickHandler) {
+      this.citationClickHandler();
+      this.citationClickHandler = undefined;
+    }
+    
     // Use event delegation to handle dynamically added citation links
-    document.addEventListener('click', (event) => {
-      const target = event.target as HTMLElement;
-      const citationLink = target.closest('.citation-link') || 
-                           (target.classList.contains('citation-link') ? target : null);
-      
-      if (citationLink) {
-        event.preventDefault();
-        event.stopPropagation();
+    // Attach to the component's host element for better scoping
+    this.citationClickHandler = this.renderer.listen(
+      this.elementRef.nativeElement,
+      'click',
+      (event: MouseEvent) => {
+        const target = event.target as HTMLElement;
         
-        const docId = citationLink.getAttribute('data-doc-id');
-        const pageAttr = citationLink.getAttribute('data-page');
-        const page = pageAttr ? parseInt(pageAttr, 10) : undefined;
+        // Try to find the citation link using closest() method (more reliable)
+        const citationLink = target.closest('.citation-link') as HTMLElement | null;
         
-        if (docId) {
-          // Run inside Angular zone to trigger change detection
-          this.ngZone.run(() => {
-            this.openDocumentFromCitation(docId, page);
-          });
+        if (citationLink) {
+          event.preventDefault();
+          event.stopPropagation();
+          
+          const docId = citationLink.getAttribute('data-doc-id');
+          let page: number | undefined;
+          let citedPages: number[] | undefined;
+          
+          const pageAttr = citationLink.getAttribute('data-page');
+          if (pageAttr) {
+            const parsed = parseInt(pageAttr, 10);
+            if (!isNaN(parsed) && parsed > 0) {
+              page = parsed;
+            }
+          }
+          
+          const pagesAttr = citationLink.getAttribute('data-pages');
+          if (pagesAttr) {
+            const parsedPages = pagesAttr
+              .split(',')
+              .map(p => parseInt(p.trim(), 10))
+              .filter(p => !isNaN(p) && p > 0);
+            if (parsedPages.length > 0) {
+              citedPages = parsedPages;
+              if (page === undefined) {
+                page = parsedPages[0];
+              }
+            }
+          }
+          
+          if (!citedPages || citedPages.length === 0) {
+            const text = (citationLink.textContent || '').replace(/\s+/g, ' ');
+            const pageMatches = Array.from(text.matchAll(/page(?:s)?\s*(\d+)/gi)).map(match => parseInt(match[1], 10));
+            const numberMatches = Array.from(text.matchAll(/\b(\d{1,4})\b/g)).map(match => parseInt(match[1], 10));
+            
+            const combined = [...pageMatches, ...numberMatches]
+              .filter(num => !isNaN(num) && num > 0)
+              .filter((num, idx, arr) => arr.indexOf(num) === idx);
+            
+            if (combined.length > 0) {
+              citedPages = combined;
+              if (page === undefined) {
+                page = combined[0];
+              }
+              citationLink.setAttribute('data-pages', combined.join(','));
+              citationLink.setAttribute('data-page', String(combined[0]));
+            }
+          }
+          
+          if (docId) {
+            // Run inside Angular zone to trigger change detection
+            this.ngZone.run(() => {
+              this.openDocumentFromCitation(docId, page, citedPages);
+            });
+          } else {
+            console.warn('Citation link clicked but no doc-id found', citationLink);
+          }
         }
       }
-    });
+    );
   }
   
-  async openDocumentFromCitation(docId: string, page?: number) {
+  async openDocumentFromCitation(docId: string, page?: number, citedPages?: number[]) {
     let document = this.allDocuments.find(doc => doc.id === docId);
     
     // If the document is missing locally, refresh document list once
@@ -240,10 +331,191 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
     
     // Ensure explorer is visible and show the PDF with page navigation
     this.showExplorer = true;
-    this.viewDocumentPDF(document, page);
+    this.viewDocumentPDF(document, page, citedPages);
+  }
+
+  // ---------------------------
+  // Speech to Text
+  // ---------------------------
+
+  private initializeSpeechRecognition(): void {
+    const SpeechRecognition =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition ||
+      (window as any).mozSpeechRecognition ||
+      (window as any).msSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      return;
+    }
+
+    this.speechRecognition = new SpeechRecognition();
+    this.speechRecognition.lang = 'en-US';
+    this.speechRecognition.interimResults = false;
+    this.speechRecognition.maxAlternatives = 1;
+
+    this.speechRecognition.addEventListener('start', () => {
+      this.ngZone.run(() => {
+        this.isListening = true;
+        this.userMessage = '';
+      });
+    });
+
+    this.speechRecognition.addEventListener('end', () => {
+      this.ngZone.run(() => {
+        this.isListening = false;
+      });
+    });
+
+    this.speechRecognition.addEventListener('error', () => {
+      this.ngZone.run(() => {
+        this.isListening = false;
+      });
+    });
+
+    this.speechRecognition.addEventListener('result', (event: any) => {
+      const recognitionEvent = event as any;
+      const results = Array.from(recognitionEvent.results || []);
+      const transcript = results
+        .map((result: any) => (result[0]?.transcript ?? ''))
+        .join(' ')
+        .trim();
+
+      this.ngZone.run(() => {
+        if (transcript.length > 0) {
+          this.userMessage = transcript;
+          if (!this.isLoading && this.currentSession) {
+            this.sendMessage();
+          }
+        }
+      });
+    });
+  }
+
+  toggleVoiceInput(): void {
+    if (!this.speechRecognition || this.isLoading || !this.currentSession) {
+      return;
+    }
+
+    if (this.isListening) {
+      this.speechRecognition.stop();
+    } else {
+      try {
+        this.speechRecognition.start();
+      } catch (error) {
+        this.isListening = false;
+      }
+    }
+  }
+
+  get isSpeechSupported(): boolean {
+    return !!this.speechRecognition;
+  }
+
+  // ---------------------------
+  // Speech Synthesis
+  // ---------------------------
+
+  private initializeSpeechSynthesis(): void {
+    if (typeof window === 'undefined' || !(window as any).speechSynthesis || !(window as any).SpeechSynthesisUtterance) {
+      this.voiceSupport = false;
+      return;
+    }
+
+    this.voiceSupport = true;
+    this.loadVoices();
+    this.voicesChangedHandler = () => {
+      this.ngZone.run(() => this.loadVoices());
+    };
+    window.speechSynthesis.addEventListener('voiceschanged', this.voicesChangedHandler);
+  }
+
+  private loadVoices(): void {
+    if (!this.voiceSupport) {
+      return;
+    }
+    const voices = window.speechSynthesis.getVoices();
+    if (!voices || voices.length === 0) {
+      return;
+    }
+
+    if (this.preferredVoice && voices.some(v => v.voiceURI === this.preferredVoice?.voiceURI)) {
+      return;
+    }
+
+    const englishVoice = voices.find(v => v.lang?.toLowerCase().startsWith('en'));
+    this.preferredVoice = englishVoice ?? voices[0];
+  }
+
+  speakAssistantMessage(message: ChatMessage): void {
+    if (!this.voiceSupport || !message?.content) {
+      return;
+    }
+
+    const plainText = this.extractPlainTextFromMarkdown(message.content);
+    if (!plainText) {
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(plainText);
+    if (this.preferredVoice) {
+      utterance.voice = this.preferredVoice;
+    }
+
+    utterance.rate = 1;
+    utterance.pitch = 1;
+
+    utterance.onstart = () => {
+      this.ngZone.run(() => {
+        this.isSpeaking = true;
+        this.speakingMessageId = message.id;
+      });
+    };
+
+    const resetSpeakingState = () => {
+      this.ngZone.run(() => {
+        this.isSpeaking = false;
+        this.speakingMessageId = null;
+      });
+    };
+
+    utterance.onend = resetSpeakingState;
+    utterance.onerror = resetSpeakingState;
+
+    window.speechSynthesis.speak(utterance);
+  }
+
+  stopSpeaking(): void {
+    if (!this.voiceSupport) {
+      return;
+    }
+    window.speechSynthesis.cancel();
+    this.isSpeaking = false;
+    this.speakingMessageId = null;
+  }
+
+  private extractPlainTextFromMarkdown(markdown: string): string {
+    try {
+      const html = this.markdownRenderer.render(markdown || '');
+      if (typeof window !== 'undefined' && (window as any).DOMParser) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        return doc?.body?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+      }
+      return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    } catch (_error) {
+      return markdown.replace(/[_*`~>\[\]#-]/g, ' ').replace(/\s+/g, ' ').trim();
+    }
   }
 
   ngOnDestroy() {
+    // Clean up citation click handler
+    if (this.citationClickHandler) {
+      this.citationClickHandler();
+      this.citationClickHandler = undefined;
+    }
+    
     // Clean up Sigma instance to prevent memory leaks
     if (this.sigmaInstance) {
       try {
@@ -253,6 +525,21 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
         console.warn('Error cleaning up Sigma instance:', err);
       }
     }
+
+    if (this.speechRecognition) {
+      try {
+        this.speechRecognition.stop();
+      } catch {
+        // ignore
+      }
+      this.speechRecognition = null;
+    }
+
+    if (this.voicesChangedHandler && this.voiceSupport) {
+      window.speechSynthesis.removeEventListener('voiceschanged', this.voicesChangedHandler);
+    }
+
+    this.stopSpeaking();
   }
 
   async loadSessions() {
@@ -304,14 +591,6 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
     if (!this.currentSession) return;
     try {
       this.messages = await firstValueFrom(this.api.get(`/chat/sessions/${this.currentSession.id}/messages`));
-      
-      // Graph data now comes from backend, but fallback to extraction if not present
-      this.messages.forEach(msg => {
-        if (msg.role === 'assistant' && !msg.graphData) {
-          this.extractGraphFromResponse(msg);
-        }
-      });
-      
       setTimeout(() => this.scrollToBottom(), 100);
     } catch (error) {
       console.error('Failed to load messages:', error);
@@ -512,12 +791,24 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
   }
 
   async viewDocumentGraph(doc: Document) {
+    const isDifferentDoc = this.currentGraphDocumentId !== doc.id;
+    if (isDifferentDoc) {
+      this.graphEntities = [];
+      this.graphEdges = [];
+      this.graphSearchQuery = '';
+      this.graphSearchActive = false;
+      this.graphSearchMatches = 0;
+    }
+
+    // Clear flagged entities when switching documents (but not on initial selection)
+    const isDifferentDocument = this.selectedDocument && this.selectedDocument.id && this.selectedDocument.id !== doc.id;
+    if (isDifferentDocument) {
+      this.flaggedEntityIds.clear();
+      this.showFlaggedOnly = false;
+    }
+    
     this.selectedDocument = doc;
     this.explorerView = 'graph';
-    
-    // Reset graph data
-    this.graphEntities = [];
-    this.graphEdges = [];
     
     // Destroy existing Sigma instance
     if (this.sigmaInstance) {
@@ -529,35 +820,428 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
       }
     }
     
+    await this.loadGraphData(doc);
+    this.applyGraphSearch();
+  }
+
+  private async loadGraphData(doc: Document, forceReload: boolean = false): Promise<void> {
     if (!doc.graph_id) {
       console.warn('No graph_id for document:', doc.id);
+      this.currentGraphDocumentId = doc.id;
+      this.allGraphEntities = [];
+      this.allGraphEdges = [];
+      this.resetGraphSearchState(false);
+      return;
+    }
+
+    const isSameDoc = this.currentGraphDocumentId === doc.id;
+    if (!forceReload && isSameDoc && this.allGraphEntities.length > 0) {
+      return;
+    }
+
+    try {
+      const entities = await firstValueFrom(this.api.get(`/entities/graph/${doc.graph_id}`));
+
+      let relationships: any[] = [];
+      try {
+        relationships = await firstValueFrom(this.api.get(`/relationships/graph/${doc.graph_id}`));
+        console.log('🔗 Raw relationships from API:', relationships.slice(0, 3));
+      } catch (err) {
+        console.warn('No relationships loaded:', err);
+      }
+
+      this.currentGraphDocumentId = doc.id;
+      this.allGraphEntities = entities || [];
+      this.allGraphEdges = relationships || [];
+      console.log(`📊 Loaded ${this.allGraphEntities.length} entities and ${this.allGraphEdges.length} relationships for graph ${doc.graph_id}`);
+      this.resetGraphSearchState(false);
+    } catch (error) {
+      console.error('Failed to load graph data:', error);
+      this.allGraphEntities = [];
+      this.allGraphEdges = [];
+      this.resetGraphSearchState(false);
+    }
+  }
+
+  private resetGraphSearchState(shouldRefresh: boolean = true): void {
+    this.graphSearchQuery = '';
+    this.graphSearchActive = false;
+    this.graphEntities = [...this.allGraphEntities];
+    this.graphEdges = [...this.allGraphEdges];
+    this.graphSearchMatches = this.graphEntities.length;
+
+    if (shouldRefresh) {
+      this.refreshGraphVisualization();
+    }
+  }
+
+  applyGraphSearch(): void {
+    if (!this.allGraphEntities) {
+      this.graphEntities = [];
+      this.graphEdges = [];
+      this.graphSearchMatches = 0;
+      this.graphSearchActive = false;
+      return;
+    }
+
+    // If flagged filter is active, use that instead
+    if (this.showFlaggedOnly) {
+      this.applyFlaggedFilter();
+      return;
+    }
+
+    const query = (this.graphSearchQuery || '').trim().toLowerCase();
+
+    if (!query) {
+      this.graphSearchActive = false;
+      this.graphEntities = [...this.allGraphEntities];
+      this.graphEdges = [...this.allGraphEdges];
+      this.graphSearchMatches = this.graphEntities.length;
+    } else {
+      const matchedEntities = this.allGraphEntities.filter((entity) => this.matchesEntity(entity, query));
+      const matchedIds = new Set<string>();
+      matchedEntities.forEach((entity) => {
+        const id = this.getEntityId(entity);
+        if (id) {
+          matchedIds.add(id);
+        }
+      });
+
+      this.graphSearchMatches = matchedIds.size;
+      this.graphSearchActive = true;
+
+      if (matchedIds.size === 0) {
+        this.graphEntities = [];
+        this.graphEdges = [];
+      } else {
+        const visibleIds = new Set<string>(matchedIds);
+
+        this.allGraphEdges.forEach((edge) => {
+          const { source, target } = this.getEdgeEndpoints(edge);
+          if (!source || !target) {
+            return;
+          }
+          if (matchedIds.has(source) || matchedIds.has(target)) {
+            visibleIds.add(source);
+            visibleIds.add(target);
+          }
+        });
+
+        this.graphEntities = this.allGraphEntities.filter((entity) => {
+          const id = this.getEntityId(entity);
+          return !!id && visibleIds.has(id);
+        });
+
+        this.graphEdges = this.allGraphEdges.filter((edge) => {
+          const { source, target } = this.getEdgeEndpoints(edge);
+          return !!source && !!target && visibleIds.has(source) && visibleIds.has(target);
+        });
+      }
+    }
+
+    if (this.explorerView === 'graph' || this.isGraphFullscreen) {
+      this.refreshGraphVisualization();
+    }
+  }
+
+  clearGraphSearch(event?: Event): void {
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    if (!this.graphSearchQuery) {
+      return;
+    }
+    this.graphSearchQuery = '';
+    this.applyGraphSearch();
+  }
+
+  toggleEntityFlag(entity: any, event?: Event): void {
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    const entityId = this.getEntityId(entity);
+    if (!entityId) {
+      return;
+    }
+
+    // Verify entity exists in allGraphEntities before flagging
+    if (this.allGraphEntities && this.allGraphEntities.length > 0) {
+      const exists = this.allGraphEntities.some(e => this.getEntityId(e) === entityId);
+      if (!exists) {
+        return;
+      }
+    }
+
+    if (this.flaggedEntityIds.has(entityId)) {
+      this.flaggedEntityIds.delete(entityId);
+    } else {
+      this.flaggedEntityIds.add(entityId);
+    }
+
+    // If showing flagged only, update the graph
+    if (this.showFlaggedOnly) {
+      this.applyFlaggedFilter();
+    }
+  }
+
+  isEntityFlagged(entity: any): boolean {
+    const entityId = this.getEntityId(entity);
+    return entityId ? this.flaggedEntityIds.has(entityId) : false;
+  }
+
+  applyFlaggedFilter(): void {
+    if (!this.showFlaggedOnly) {
+      // If not filtering by flags, apply regular search (but avoid recursion)
+      this.showFlaggedOnly = false; // Reset flag to prevent recursion
+      this.applyGraphSearch();
       return;
     }
     
-    try {
-      // Load entities for graph
-      const entities = await firstValueFrom(this.api.get(`/entities/graph/${doc.graph_id}`));
-      this.graphEntities = entities || [];
-      
-      // Load edges/relationships for this specific graph
-      try {
-        const relationships = await firstValueFrom(this.api.get(`/relationships/graph/${doc.graph_id}`));
-        this.graphEdges = relationships || [];
-        console.log('🔗 Raw relationships from API:', this.graphEdges.slice(0, 3));
-      } catch (err) {
-        console.warn('No relationships loaded:', err);
-        this.graphEdges = [];
-      }
-      
-      console.log(`📊 Loaded ${this.graphEntities.length} entities and ${this.graphEdges.length} relationships for graph ${doc.graph_id}`);
-      
-      // Render graph with Sigma after DOM updates
-      setTimeout(() => this.renderSigmaGraph(false), 150);
-    } catch (error) {
-      console.error('Failed to load graph entities:', error);
+    if (this.flaggedEntityIds.size === 0) {
+      // No flagged entities - show empty results
       this.graphEntities = [];
       this.graphEdges = [];
+      if (this.explorerView === 'graph' || this.isGraphFullscreen) {
+        this.refreshGraphVisualization();
+      }
+      return;
     }
+
+    if (!this.allGraphEntities || !this.allGraphEdges) {
+      this.graphEntities = [];
+      this.graphEdges = [];
+      return;
+    }
+
+    // Check if flagged IDs exist in allGraphEntities
+    const allEntityIds = new Set(this.allGraphEntities.map(e => this.getEntityId(e)).filter((id): id is string => !!id));
+    const matchingFlaggedIds = Array.from(this.flaggedEntityIds).filter(id => allEntityIds.has(id));
+
+    // Start with flagged entities that exist in allGraphEntities
+    const visibleIds = new Set<string>(matchingFlaggedIds);
+
+    // Add all entities connected to flagged entities via edges
+    const matchingFlaggedSet = new Set(matchingFlaggedIds);
+    this.allGraphEdges.forEach((edge) => {
+      const { source, target } = this.getEdgeEndpoints(edge);
+      if (!source || !target) {
+        return;
+      }
+      if (matchingFlaggedSet.has(source) || matchingFlaggedSet.has(target)) {
+        visibleIds.add(source);
+        visibleIds.add(target);
+      }
+    });
+
+    // Filter entities to show only flagged and their connections
+    this.graphEntities = this.allGraphEntities.filter((entity) => {
+      const id = this.getEntityId(entity);
+      return !!id && visibleIds.has(id);
+    });
+
+    // Filter edges to show only edges between visible entities
+    this.graphEdges = this.allGraphEdges.filter((edge) => {
+      const { source, target } = this.getEdgeEndpoints(edge);
+      return !!source && !!target && visibleIds.has(source) && visibleIds.has(target);
+    });
+
+    // Apply search filter if active
+    if (this.graphSearchQuery) {
+      const query = this.graphSearchQuery.trim().toLowerCase();
+      if (query) {
+        const searchMatched = this.graphEntities.filter((entity) => this.matchesEntity(entity, query));
+        const searchMatchedIds = new Set<string>();
+        searchMatched.forEach((entity) => {
+          const id = this.getEntityId(entity);
+          if (id) searchMatchedIds.add(id);
+        });
+
+        // Include connections to search-matched entities
+        this.graphEdges.forEach((edge) => {
+          const { source, target } = this.getEdgeEndpoints(edge);
+          if (source && target && (searchMatchedIds.has(source) || searchMatchedIds.has(target))) {
+            searchMatchedIds.add(source);
+            searchMatchedIds.add(target);
+          }
+        });
+
+        this.graphEntities = this.graphEntities.filter((entity) => {
+          const id = this.getEntityId(entity);
+          return !!id && searchMatchedIds.has(id);
+        });
+
+        this.graphEdges = this.graphEdges.filter((edge) => {
+          const { source, target } = this.getEdgeEndpoints(edge);
+          return !!source && !!target && searchMatchedIds.has(source) && searchMatchedIds.has(target);
+        });
+      }
+    }
+
+    if (this.explorerView === 'graph' || this.isGraphFullscreen) {
+      this.refreshGraphVisualization();
+    }
+  }
+
+  toggleFlaggedFilter(): void {
+    this.showFlaggedOnly = !this.showFlaggedOnly;
+    if (this.showFlaggedOnly) {
+      this.applyFlaggedFilter();
+    } else {
+      this.applyGraphSearch(); // Revert to regular search
+    }
+  }
+
+  clearAllFlags(): void {
+    this.flaggedEntityIds.clear();
+    this.showFlaggedOnly = false;
+    this.applyGraphSearch(); // Revert to regular view
+  }
+
+  private refreshGraphVisualization(): void {
+    if (this.explorerView === 'graph') {
+      setTimeout(() => this.renderSigmaGraph(false), 0);
+    }
+    if (this.isGraphFullscreen) {
+      setTimeout(() => this.renderSigmaGraph(true), 0);
+    }
+  }
+
+  private getEntityId(entity: any): string | undefined {
+    if (!entity) return undefined;
+    return entity.id || entity.entityId || entity.entity_id || entity.uuid;
+  }
+
+  getEntityDisplayType(entity: any): string {
+    if (!entity) {
+      return 'Entity';
+    }
+
+    const rawType = (entity.display_type || entity.displayType || '').toString().trim();
+    if (rawType) {
+      return rawType;
+    }
+
+    const type = (entity.type || entity.entityType || '').toString();
+    const typeLower = type.toLowerCase();
+    const props = entity.properties || entity.data || {};
+    const name = (entity.name || '').toString();
+    const propKeys = Object.keys(props || {}).map((key) => key.toLowerCase());
+    const propValues = Object.values(props || {});
+
+    const containsMetricKeyword = (text: string) =>
+      /revenue|billings|gross margin|operating margin|earnings|diluted|guidance|subscription/i.test(text);
+
+    if (propKeys.some((key) => key.includes('exhibit'))) {
+      if (/press release/i.test(props.description || name)) {
+        return 'Press Release';
+      }
+      if (/cover page/i.test(props.description || name)) {
+        return 'Cover Page Exhibit';
+      }
+      return 'Exhibit';
+    }
+
+    if (/press release/i.test(name) || /press release/i.test(props.description || '')) {
+      return 'Press Release';
+    }
+
+    if (/inline xbrl|cover page/i.test(name) || propKeys.some((key) => key.includes('inline'))) {
+      return 'Inline XBRL';
+    }
+
+    if (containsMetricKeyword(name) || propKeys.some((key) => containsMetricKeyword(key))) {
+      return 'Financial Metric';
+    }
+
+    const numericValueCount = propValues.filter((value) => {
+      if (typeof value === 'number') return true;
+      if (typeof value === 'string') {
+        const numeric = value.replace(/[$,%\s]/g, '');
+        return numeric !== '' && !Number.isNaN(Number(numeric));
+      }
+      return false;
+    }).length;
+
+    if (typeLower === 'location' && numericValueCount >= Math.max(1, propValues.length - 1)) {
+      return 'Financial Metric';
+    }
+
+    return type || 'Entity';
+  }
+
+  private getEdgeEndpoints(edge: any): { source?: string; target?: string } {
+    if (!edge) return {};
+    const source =
+      edge.from_entity_id ||
+      edge.source ||
+      edge.from ||
+      edge.start ||
+      edge.head ||
+      edge.source_id ||
+      edge.entitySourceId;
+    const target =
+      edge.to_entity_id ||
+      edge.target ||
+      edge.to ||
+      edge.end ||
+      edge.tail ||
+      edge.target_id ||
+      edge.entityTargetId;
+    return { source, target };
+  }
+
+  private matchesEntity(entity: any, query: string): boolean {
+    if (!entity) {
+      return false;
+    }
+
+    const name = (entity.name || entity.label || '').toString().toLowerCase();
+    if (name.includes(query)) {
+      return true;
+    }
+
+    const type = (entity.type || entity.entityType || '').toString().toLowerCase();
+    if (type.includes(query)) {
+      return true;
+    }
+
+    const displayType = this.getEntityDisplayType(entity).toLowerCase();
+    if (displayType.includes(query)) {
+      return true;
+    }
+
+    const properties = entity.properties || entity.data || {};
+    if (properties && typeof properties === 'object') {
+      for (const [key, value] of Object.entries(properties)) {
+        if (value === null || value === undefined) {
+          continue;
+        }
+
+        const keyStr = String(key).toLowerCase();
+        if (keyStr.includes(query)) {
+          return true;
+        }
+
+        let valueStr = '';
+        if (typeof value === 'string') {
+          valueStr = value.toLowerCase();
+        } else if (typeof value === 'number' || typeof value === 'boolean') {
+          valueStr = String(value).toLowerCase();
+        } else if (Array.isArray(value)) {
+          valueStr = value.map((item) => String(item).toLowerCase()).join(' ');
+        } else if (typeof value === 'object') {
+          valueStr = JSON.stringify(value).toLowerCase();
+        }
+
+        if (valueStr.includes(query)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   // Apply layout to graph
@@ -683,63 +1367,133 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
         'Contract': '#6366f1'
       };
       
+      // Remove existing tooltips if any
+      ['node-tooltip', 'edge-tooltip'].forEach((id) => {
+        const existing = document.getElementById(id);
+        if (existing && existing.parentElement) {
+          existing.parentElement.removeChild(existing);
+        }
+      });
+      
       // Add nodes (positions will be set by layout algorithm)
       console.log('🔵 Adding nodes to graph...');
+      const MAX_NODE_TOOLTIP_PROPS = 5;
       this.graphEntities.forEach((entity) => {
+        const props = entity.properties || {};
+        const description = Object.entries(props)
+          .filter(([key, value]) => value !== null && value !== undefined && String(value).trim() !== '')
+          .slice(0, MAX_NODE_TOOLTIP_PROPS)
+          .map(([key, value]) => {
+            let displayValue = value;
+            if (typeof value === 'number' && Math.abs(value) >= 1000) {
+              displayValue = new Intl.NumberFormat().format(value);
+            }
+            return `${this.formatLabel(key)}: ${displayValue}`;
+          })
+          .join('\n');
+
         (this.graphInstance as any).addNode(entity.id, {
           label: entity.name,
           x: 0,
           y: 0,
           size: 8,
-          color: typeColors[entity.type] || '#94a3b8'
+          color: typeColors[entity.type] || '#94a3b8',
+          description
         });
       });
       console.log(`✅ Added ${this.graphEntities.length} nodes`);
       
-      // Add edges
+      // Add edges with metadata
       console.log('🔗 Adding edges to graph...');
-      console.log(`   Total edges to process: ${this.graphEdges.length}`);
-      if (this.graphEdges.length > 0) {
-        console.log('   Sample edge:', this.graphEdges[0]);
-      }
+      const normalizedEdges: Array<{
+        key: string;
+        from: string;
+        to: string;
+        label: string;
+        properties: Record<string, any>;
+      }> = [];
+      const edgeDataByKey = new Map<string, any>();
+      const MAX_EDGE_TOOLTIP_PROPS = 5;
+      
+      this.graphEdges.forEach((edge) => {
+        const sourceId = edge.from_entity_id || edge.source || edge.from || edge.start || edge.head;
+        const targetId = edge.to_entity_id || edge.target || edge.to || edge.end || edge.tail;
+        if (!sourceId || !targetId) {
+          return;
+        }
+        
+        const label = edge.relationship_type || edge.type || edge.label || 'RELATED_TO';
+        const properties: Record<string, any> = { ...(edge.properties || {}) };
+        if (edge.reasoning && !properties['reasoning']) {
+          properties['reasoning'] = edge.reasoning;
+        }
+        if (edge.explanation && !properties['explanation']) {
+          properties['explanation'] = edge.explanation;
+        }
+        if (edge.confidence !== undefined && properties['confidence'] === undefined) {
+          properties['confidence'] = edge.confidence;
+        }
+        if (edge.impact && !properties['impact']) {
+          properties['impact'] = edge.impact;
+        }
+        if (edge.citations && !properties['citations']) {
+          properties['citations'] = edge.citations;
+        }
+        if (edge.detected_by && !properties['detected_by']) {
+          properties['detected_by'] = edge.detected_by;
+        }
+
+        const edgeKey = `edge_${normalizedEdges.length}`;
+        normalizedEdges.push({
+          key: edgeKey,
+          from: sourceId,
+          to: targetId,
+          label,
+          properties
+        });
+        edgeDataByKey.set(edgeKey, {
+          ...edge,
+          relationship_type: label,
+          from_entity_id: sourceId,
+          to_entity_id: targetId,
+          properties
+        });
+      });
       
       let edgesAdded = 0;
       let edgesSkipped = 0;
-      this.graphEdges.forEach((edge, index) => {
+      normalizedEdges.forEach((edge) => {
         try {
-          const hasSource = (this.graphInstance as any).hasNode(edge.from_entity_id);
-          const hasTarget = (this.graphInstance as any).hasNode(edge.to_entity_id);
+          const hasSource = (this.graphInstance as any).hasNode(edge.from);
+          const hasTarget = (this.graphInstance as any).hasNode(edge.to);
           
           if (hasSource && hasTarget) {
-            // Use unique edge ID
-            const edgeId = `edge_${index}`;
             (this.graphInstance as any).addEdgeWithKey(
-              edgeId,
-              edge.from_entity_id, 
-              edge.to_entity_id, 
+              edge.key,
+              edge.from,
+              edge.to,
               {
-                label: edge.relationship_type || 'RELATED_TO',
-                size: 2,  // Thinner edges
-                color: '#ef4444',  // Bright red
-                type: 'arrow'
+                label: edge.label || 'RELATED_TO',
+                size: 2,
+                color: '#ef4444',
+                type: 'arrow',
+                description: Object.entries(edge.properties || {})
+                  .filter(([key, value]) => value !== null && value !== undefined && String(value).trim() !== '')
+                  .slice(0, MAX_EDGE_TOOLTIP_PROPS)
+                  .map(([key, value]) => `${this.formatLabel(key)}: ${value}`)
+                  .join('\n')
               }
             );
             edgesAdded++;
-            if (index < 3) {
-              console.log(`   ✅ Edge ${index}: ${edge.from_entity_id} -> ${edge.to_entity_id} (${edge.relationship_type})`);
-            }
           } else {
             edgesSkipped++;
-            if (edgesSkipped <= 3) {
-              console.warn(`   ❌ Missing nodes for edge ${index}: ${edge.from_entity_id} -> ${edge.to_entity_id} (source:${hasSource}, target:${hasTarget})`);
-            }
           }
         } catch (err) {
-          console.error(`   ❌ Failed to add edge ${edge.from_entity_id} -> ${edge.to_entity_id}:`, err);
+          console.error(`   ❌ Failed to add edge ${edge.from} -> ${edge.to}:`, err);
         }
       });
       
-      console.log(`✅ Added ${edgesAdded} edges (skipped ${edgesSkipped}) out of ${this.graphEdges.length} total`);
+      console.log(`✅ Added ${edgesAdded} edges (skipped ${edgesSkipped}) out of ${normalizedEdges.length} total`);
       
       // Apply layout to the graph
       this.applyLayout(this.graphInstance, this.currentLayout);
@@ -785,73 +1539,46 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
       
       console.log('🎨 Sigma instance created, enabling node dragging...');
       
-      // Enable node dragging
+      // Enable node dragging with tooltips
       let draggedNode: string | null = null;
       let isDragging = false;
       
-      // Mouse down on node - start drag
       this.sigmaInstance.on('downNode', (e: any) => {
         isDragging = true;
         draggedNode = e.node;
         (this.graphInstance as any).setNodeAttribute(draggedNode, 'highlighted', true);
         container.nativeElement.style.cursor = 'grabbing';
-      });
-      
-      // Hover on node - show grab cursor
-      this.sigmaInstance.on('enterNode', () => {
-        container.nativeElement.style.cursor = 'grab';
-      });
-      
-      // Leave node - reset cursor
-      this.sigmaInstance.on('leaveNode', () => {
-        if (!isDragging) {
-          container.nativeElement.style.cursor = 'default';
-        }
-      });
-      
-      // Edge hover - show relationship details in tooltip
-      this.sigmaInstance.on('enterEdge', (event: any) => {
-        const edgeId = event.edge;
-        const edge = this.graphEdges.find((e: any) => `edge_${this.graphEdges.indexOf(e)}` === edgeId);
-        
-        if (edge && edge.properties) {
-          const reasoning = edge.properties.reasoning || 'No reasoning provided';
-          const confidence = edge.properties.confidence ? ` (confidence: ${(edge.properties.confidence * 100).toFixed(0)}%)` : '';
-          const detectedBy = edge.properties.detected_by || 'unknown';
-          
-          // Create or update tooltip
-          let tooltip = document.getElementById('edge-tooltip');
+
+        const attrs = (this.graphInstance as any).getNodeAttributes(draggedNode);
+        const description = attrs?.description;
+        if (description) {
+          let tooltip = document.getElementById('node-tooltip');
           if (!tooltip) {
             tooltip = document.createElement('div');
-            tooltip.id = 'edge-tooltip';
+            tooltip.id = 'node-tooltip';
             tooltip.style.position = 'fixed';
-            tooltip.style.backgroundColor = 'rgba(31, 41, 55, 0.95)';
+            tooltip.style.backgroundColor = 'rgba(31,41,55,0.95)';
             tooltip.style.color = 'white';
             tooltip.style.padding = '8px 12px';
             tooltip.style.borderRadius = '6px';
             tooltip.style.fontSize = '12px';
-            tooltip.style.maxWidth = '300px';
-            tooltip.style.zIndex = '10000';
+            tooltip.style.maxWidth = '260px';
             tooltip.style.pointerEvents = 'none';
-            tooltip.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1)';
+            tooltip.style.zIndex = '10000';
+            tooltip.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
             document.body.appendChild(tooltip);
           }
-          
           tooltip.innerHTML = `
-            <div style="margin-bottom: 4px"><strong>${edge.relationship_type || 'RELATIONSHIP'}</strong></div>
-            <div style="color: #d1d5db; font-size: 11px">${reasoning}${confidence}</div>
-            <div style="color: #9ca3af; font-size: 10px; margin-top: 4px">Detected by: ${detectedBy}</div>
+            <div style="font-weight:600;margin-bottom:4px">${attrs?.label || 'Entity'}</div>
+            <div style="white-space:pre-wrap;color:#d1d5db;font-size:11px">${description}</div>
           `;
           tooltip.style.display = 'block';
-          
-          // Position tooltip near mouse
-          const updateTooltipPosition = (e: MouseEvent) => {
+          const updateTooltipPosition = (evt: MouseEvent) => {
             if (tooltip) {
-              tooltip.style.left = (e.clientX + 15) + 'px';
-              tooltip.style.top = (e.clientY + 15) + 'px';
+              tooltip.style.left = (evt.clientX + 15) + 'px';
+              tooltip.style.top = (evt.clientY + 15) + 'px';
             }
           };
-          
           container.nativeElement.addEventListener('mousemove', updateTooltipPosition);
           (tooltip as any)._removeListener = () => {
             container.nativeElement.removeEventListener('mousemove', updateTooltipPosition);
@@ -859,7 +1586,116 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
         }
       });
       
-      // Leave edge - hide tooltip
+      this.sigmaInstance.on('enterNode', (event: any) => {
+        container.nativeElement.style.cursor = 'grab';
+        const nodeId = event.node;
+        const attrs = (this.graphInstance as any).getNodeAttributes(nodeId);
+        const description = attrs?.description;
+        if (description) {
+          let tooltip = document.getElementById('node-tooltip');
+          if (!tooltip) {
+            tooltip = document.createElement('div');
+            tooltip.id = 'node-tooltip';
+            tooltip.style.position = 'fixed';
+            tooltip.style.backgroundColor = 'rgba(31,41,55,0.95)';
+            tooltip.style.color = 'white';
+            tooltip.style.padding = '8px 12px';
+            tooltip.style.borderRadius = '6px';
+            tooltip.style.fontSize = '12px';
+            tooltip.style.maxWidth = '260px';
+            tooltip.style.pointerEvents = 'none';
+            tooltip.style.zIndex = '10000';
+            tooltip.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
+            document.body.appendChild(tooltip);
+          }
+          tooltip.innerHTML = `
+            <div style="font-weight:600;margin-bottom:4px">${attrs?.label || 'Entity'}</div>
+            <div style="white-space:pre-wrap;color:#d1d5db;font-size:11px">${description}</div>
+          `;
+          tooltip.style.display = 'block';
+          const updateTooltipPosition = (evt: MouseEvent) => {
+            if (tooltip) {
+              tooltip.style.left = (evt.clientX + 15) + 'px';
+              tooltip.style.top = (evt.clientY + 15) + 'px';
+            }
+          };
+          container.nativeElement.addEventListener('mousemove', updateTooltipPosition);
+          (tooltip as any)._removeListener = () => {
+            container.nativeElement.removeEventListener('mousemove', updateTooltipPosition);
+          };
+        }
+      });
+      
+      this.sigmaInstance.on('leaveNode', () => {
+        if (!isDragging) {
+          container.nativeElement.style.cursor = 'default';
+        }
+        const tooltip = document.getElementById('node-tooltip');
+        if (tooltip) {
+          tooltip.style.display = 'none';
+          if ((tooltip as any)._removeListener) {
+            (tooltip as any)._removeListener();
+          }
+        }
+      });
+      
+      // Edge hover - show relationship details in tooltip
+      this.sigmaInstance.on('enterEdge', (event: any) => {
+        const edgeKey = event.edge;
+        const edgeData = edgeDataByKey.get(edgeKey);
+        if (!edgeData) {
+          return;
+        }
+        
+        const props = edgeData.properties || {};
+        const reasoning = props['reasoning'] || props['explanation'] || edgeData.reasoning || edgeData.explanation || 'No reasoning provided';
+        const impact = props['impact'] || props['effect'];
+        const confidenceValue = props['confidence'] ?? edgeData.confidence;
+        const confidence = typeof confidenceValue === 'number'
+          ? ` (confidence: ${(confidenceValue * 100).toFixed(0)}%)`
+          : (confidenceValue ? ` (confidence: ${confidenceValue})` : '');
+        const detectedBy = props['detected_by'] || props['source'] || edgeData.detected_by || 'unknown';
+        const citations = Array.isArray(props['citations']) ? props['citations'] : [];
+        
+        let tooltip = document.getElementById('edge-tooltip');
+        if (!tooltip) {
+          tooltip = document.createElement('div');
+          tooltip.id = 'edge-tooltip';
+          tooltip.style.position = 'fixed';
+          tooltip.style.backgroundColor = 'rgba(31, 41, 55, 0.95)';
+          tooltip.style.color = 'white';
+          tooltip.style.padding = '8px 12px';
+          tooltip.style.borderRadius = '6px';
+          tooltip.style.fontSize = '12px';
+          tooltip.style.maxWidth = '320px';
+          tooltip.style.zIndex = '10000';
+          tooltip.style.pointerEvents = 'none';
+          tooltip.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1)';
+          document.body.appendChild(tooltip);
+        }
+        
+        tooltip.innerHTML = `
+          <div style="margin-bottom: 4px"><strong>${edgeData.relationship_type || 'RELATIONSHIP'}</strong></div>
+          <div style="color: #d1d5db; font-size: 11px">${reasoning}${confidence}</div>
+          ${impact ? `<div style="color:#fbbf24;font-size:11px;margin-top:4px">Impact: ${impact}</div>` : ''}
+          <div style="color: #9ca3af; font-size: 10px; margin-top: 4px">Detected by: ${detectedBy}</div>
+          ${citations.length > 0 ? `<div style="color:#9ca3af;font-size:10px;margin-top:4px">Citation: ${citations[0]}</div>` : ''}
+        `;
+        tooltip.style.display = 'block';
+        
+        const updateTooltipPosition = (evt: MouseEvent) => {
+          if (tooltip) {
+            tooltip.style.left = (evt.clientX + 15) + 'px';
+            tooltip.style.top = (evt.clientY + 15) + 'px';
+          }
+        };
+        
+        container.nativeElement.addEventListener('mousemove', updateTooltipPosition);
+        (tooltip as any)._removeListener = () => {
+          container.nativeElement.removeEventListener('mousemove', updateTooltipPosition);
+        };
+      });
+      
       this.sigmaInstance.on('leaveEdge', () => {
         const tooltip = document.getElementById('edge-tooltip');
         if (tooltip) {
@@ -870,34 +1706,24 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
         }
       });
       
-      // Click on edge - show detailed information
       this.sigmaInstance.on('clickEdge', (event: any) => {
-        const edgeId = event.edge;
-        const edge = this.graphEdges.find((e: any) => `edge_${this.graphEdges.indexOf(e)}` === edgeId);
-        
-        if (edge) {
-          console.group('🔗 Relationship Details');
-          console.log('Type:', edge.relationship_type || 'RELATIONSHIP');
-          console.log('From:', edge.from_entity_id);
-          console.log('To:', edge.to_entity_id);
-          console.log('Properties:', edge.properties);
-          if (edge.properties?.reasoning) {
-            console.log('Reasoning:', edge.properties.reasoning);
-          }
-          if (edge.properties?.confidence) {
-            console.log('Confidence:', (edge.properties.confidence * 100).toFixed(1) + '%');
-          }
-          if (edge.properties?.detected_by) {
-            console.log('Detected by:', edge.properties.detected_by);
-          }
-          console.groupEnd();
-          
-          // Optionally highlight the edge
-          (this.graphInstance as any).setEdgeAttribute(edgeId, 'color', '#3b82f6'); // Blue highlight
-          setTimeout(() => {
-            (this.graphInstance as any).setEdgeAttribute(edgeId, 'color', '#ef4444'); // Back to red
-          }, 2000);
+        const edgeKey = event.edge;
+        const edgeData = edgeDataByKey.get(edgeKey);
+        if (!edgeData) {
+          return;
         }
+        
+        console.group('🔗 Relationship Details');
+        console.log('Type:', edgeData.relationship_type || 'RELATIONSHIP');
+        console.log('From:', edgeData.from_entity_id);
+        console.log('To:', edgeData.to_entity_id);
+        console.log('Properties:', edgeData.properties);
+        console.groupEnd();
+        
+        (this.graphInstance as any).setEdgeAttribute(edgeKey, 'color', '#3b82f6');
+        setTimeout(() => {
+          (this.graphInstance as any).setEdgeAttribute(edgeKey, 'color', '#ef4444');
+        }, 2000);
       });
       
       // Mouse move - update node position
@@ -925,6 +1751,13 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
         }
         isDragging = false;
         container.nativeElement.style.cursor = 'default';
+        const tooltip = document.getElementById('node-tooltip');
+        if (tooltip) {
+          tooltip.style.display = 'none';
+          if ((tooltip as any)._removeListener) {
+            (tooltip as any)._removeListener();
+          }
+        }
       });
       
       // Mouse leave container - end drag
@@ -935,6 +1768,13 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
         }
         isDragging = false;
         container.nativeElement.style.cursor = 'default';
+        const tooltip = document.getElementById('node-tooltip');
+        if (tooltip) {
+          tooltip.style.display = 'none';
+          if ((tooltip as any)._removeListener) {
+            (tooltip as any)._removeListener();
+          }
+        }
       });
       
       this.sigmaInstance.refresh();
@@ -980,23 +1820,20 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
   }
 
   async viewDocumentEntities(doc: Document) {
+    const isDifferentDoc = this.currentGraphDocumentId !== doc.id;
+    if (isDifferentDoc) {
+      this.graphEntities = [];
+      this.graphEdges = [];
+      this.graphSearchQuery = '';
+      this.graphSearchActive = false;
+      this.graphSearchMatches = 0;
+    }
+
     this.selectedDocument = doc;
     this.explorerView = 'entities';
-    this.graphEntities = [];
     
-    if (!doc.graph_id) {
-      console.warn('No graph_id for document:', doc.id);
-      return;
-    }
-    
-    try {
-      const entities = await firstValueFrom(this.api.get(`/entities/graph/${doc.graph_id}`));
-      this.graphEntities = entities || [];
-      console.log(`Loaded ${this.graphEntities.length} entities for graph ${doc.graph_id}`);
-    } catch (error) {
-      console.error('Failed to load entities:', error);
-      this.graphEntities = [];
-    }
+    await this.loadGraphData(doc);
+    this.applyGraphSearch();
   }
 
   async viewDocumentRisks(doc: Document) {
@@ -1073,8 +1910,35 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
   async viewDocumentPDF(doc: Document, page?: number, citedPages?: number[]) {
     this.selectedDocument = doc;
     this.explorerView = 'pdf';
-    this.pdfTargetPage = page; // Store target page for PDF viewer
-    this.pdfCitedPages = citedPages || (page ? [page] : []); // Store all cited pages
+    
+    const normalizedPages: number[] = [];
+    const addPage = (value: number | string | null | undefined) => {
+      if (value === null || value === undefined) {
+        return;
+      }
+      const num = typeof value === 'number' ? value : parseInt(String(value).trim(), 10);
+      if (!isNaN(num) && num > 0 && !normalizedPages.includes(num)) {
+        normalizedPages.push(num);
+      }
+    };
+    
+    if (Array.isArray(citedPages) && citedPages.length > 0) {
+      citedPages.forEach((p) => addPage(p));
+    }
+    
+    if (page !== undefined) {
+      addPage(page);
+    }
+    
+    this.pdfCitedPages = normalizedPages;
+    
+    if (page !== undefined && !isNaN(page) && page > 0) {
+      this.pdfTargetPage = page;
+    } else if (normalizedPages.length > 0) {
+      this.pdfTargetPage = normalizedPages[0];
+    } else {
+      this.pdfTargetPage = undefined;
+    }
   }
   
   navigateToCitedPage(pageIndex: number) {
@@ -1107,6 +1971,15 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
   formatTime(dateStr: string): string {
     const date = new Date(dateStr);
     return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
+
+  private formatLabel(key: string): string {
+    if (!key) {
+      return '';
+    }
+    return key
+      .replace(/[_\-\s]+/g, ' ')
+      .replace(/\b\w/g, (char) => char.toUpperCase());
   }
 
   scrollToBottom() {
@@ -1212,129 +2085,86 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
     return this.sanitizer.bypassSecurityTrustHtml(html);
   }
 
-  // Extract entities and relationships from AI response text
-  extractGraphFromResponse(message: ChatMessage): void {
-    if (message.role !== 'assistant' || !message.content) {
-      return;
+  private async ensureResponseGraphData(message: ChatMessage): Promise<boolean> {
+    if (
+      message.graphData &&
+      Array.isArray(message.graphData.relationships) &&
+      message.graphData.relationships.length > 0
+    ) {
+      return true;
     }
 
-    const entities: any[] = [];
-    const relationships: any[] = [];
-    const entityMap = new Map<string, any>();
-    let entityIdCounter = 0;
-
-    // Simple pattern matching for common entity mentions
-    // Looking for: "Company Name", dollar amounts, locations, dates, etc.
-    
-    // Extract company/organization names (capitalized words or phrases in quotes)
-    const companyPattern = /(?:"([^"]+)"|([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+))/g;
-    let match;
-    
-    while ((match = companyPattern.exec(message.content)) !== null) {
-      const name = match[1] || match[2];
-      if (name && !entityMap.has(name)) {
-        const entityId = `entity_${entityIdCounter++}`;
-        entityMap.set(name, {
-          id: entityId,
-          name: name,
-          type: 'Organization',
-          properties: {}
-        });
-        entities.push(entityMap.get(name));
-      }
+    if (message.graphUnavailable) {
+      return false;
     }
 
-    // Extract monetary amounts
-    const moneyPattern = /\$\s*([\d,]+(?:\.\d{2})?)\s*(million|billion|thousand)?/gi;
-    while ((match = moneyPattern.exec(message.content)) !== null) {
-      const amount = match[1];
-      const scale = match[2] || '';
-      const name = `$${amount}${scale ? ' ' + scale : ''}`;
-      if (!entityMap.has(name)) {
-        const entityId = `entity_${entityIdCounter++}`;
-        entityMap.set(name, {
-          id: entityId,
-          name: name,
-          type: 'Money',
-          properties: { amount: match[1], scale: scale }
-        });
-        entities.push(entityMap.get(name));
-      }
+    if (!message.id) {
+      return false;
     }
 
-    // Extract dates
-    const datePattern = /(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}|Q[1-4]\s+\d{4}|\d{4}/g;
-    while ((match = datePattern.exec(message.content)) !== null) {
-      const date = match[0];
-      if (!entityMap.has(date)) {
-        const entityId = `entity_${entityIdCounter++}`;
-        entityMap.set(date, {
-          id: entityId,
-          name: date,
-          type: 'Date',
-          properties: {}
-        });
-        entities.push(entityMap.get(date));
-      }
+    if (this.responseGraphLoadingMessageId === message.id) {
+      return false;
     }
 
-    // Extract relationships from common phrases
-    const relationshipPatterns = [
-      { pattern: /(\w+(?:\s+\w+)*)\s+(?:acquired|purchased)\s+(\w+(?:\s+\w+)*)/gi, type: 'ACQUIRED' },
-      { pattern: /(\w+(?:\s+\w+)*)\s+(?:invested in|invested)\s+(\w+(?:\s+\w+)*)/gi, type: 'INVESTED_IN' },
-      { pattern: /(\w+(?:\s+\w+)*)\s+(?:reported|announced)\s+(\$[\d,]+(?:\.\d{2})?(?:\s+(?:million|billion))?)/gi, type: 'REPORTED' },
-      { pattern: /(\w+(?:\s+\w+)*)\s+(?:revenue|earnings)\s+(?:of|was)\s+(\$[\d,]+(?:\.\d{2})?(?:\s+(?:million|billion))?)/gi, type: 'HAS_REVENUE' }
-    ];
+    this.responseGraphLoadingMessageId = message.id;
+    this.responseGraphError = null;
 
-    relationshipPatterns.forEach(({ pattern, type }) => {
-      const regex = new RegExp(pattern);
-      while ((match = regex.exec(message.content)) !== null) {
-        const source = match[1];
-        const target = match[2];
-        
-        const sourceEntity = entityMap.get(source);
-        const targetEntity = entityMap.get(target);
-        
-        if (sourceEntity && targetEntity) {
-          relationships.push({
-            id: `rel_${relationships.length}`,
-            from_entity_id: sourceEntity.id,
-            to_entity_id: targetEntity.id,
-            relationship_type: type,
-            properties: {}
-          });
-        }
+    try {
+      const graphResponse: any = await firstValueFrom(this.api.get(`/chat/messages/${message.id}/graph`));
+      const rawGraph = graphResponse && typeof graphResponse === 'object' ? graphResponse : {};
+      const entities = Array.isArray(rawGraph.entities) ? rawGraph.entities : [];
+      const relationships = Array.isArray(rawGraph.relationships) ? rawGraph.relationships : [];
+      const normalizedGraph = { ...rawGraph, entities, relationships };
+      const hasData = relationships.length > 0;
+
+      message.graphData = normalizedGraph;
+
+      if (hasData) {
+        message.graphUnavailable = false;
+        return true;
       }
-    });
 
-    // Store the extracted graph data
-    message.graphData = {
-      entities: entities,
-      relationships: relationships
-    };
-
-    console.log('Extracted graph from response:', {
-      entities: entities.length,
-      relationships: relationships.length
-    });
+      message.graphUnavailable = true;
+      this.responseGraphError = 'No relationships available for this answer yet.';
+      console.warn(`No enriched graph relationships found for message ${message.id}`);
+      return false;
+    } catch (error) {
+      console.error('Failed to load response graph:', error);
+      this.responseGraphError = 'Failed to load graph details. Please try again.';
+      return false;
+    } finally {
+      this.responseGraphLoadingMessageId = null;
+    }
   }
 
   // Check if message has graph data to display
   hasGraphData(message: ChatMessage): boolean {
-    return message.role === 'assistant' && 
-           message.graphData !== undefined && 
-           message.graphData.entities.length > 0;
+    if (message.role !== 'assistant') {
+      return false;
+    }
+    if (message.graphUnavailable) {
+      return false;
+    }
+    if (
+      message.graphData &&
+      Array.isArray(message.graphData.relationships) &&
+      message.graphData.relationships.length > 0
+    ) {
+      return true;
+    }
+    const content = message.content || '';
+    return /doc:[a-zA-Z0-9_]+/i.test(content);
   }
 
   // Open response graph in fullscreen modal
-  openResponseGraph(message: ChatMessage): void {
-    if (!this.hasGraphData(message)) {
-      // Try to extract graph if not already done
-      this.extractGraphFromResponse(message);
-      if (!this.hasGraphData(message)) {
-        console.warn('No graph data available for this message');
-        return;
-      }
+  async openResponseGraph(message: ChatMessage): Promise<void> {
+    if (message.role !== 'assistant') {
+      return;
+    }
+
+    const hasData = await this.ensureResponseGraphData(message);
+    if (!hasData) {
+      return;
     }
 
     this.selectedMessageForGraph = message;
@@ -1348,6 +2178,8 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
   closeResponseGraph(): void {
     this.isResponseGraphFullscreen = false;
     this.selectedMessageForGraph = null;
+    this.responseGraphError = null;
+    this.responseGraphLoadingMessageId = null;
     
     // Clean up Sigma instance
     if (this.responseSigmaInstance) {
@@ -1394,32 +2226,124 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
         'Location': '#8b5cf6'
       };
 
+      // Clean up any existing tooltips
+      ['response-node-tooltip', 'response-edge-tooltip'].forEach((id) => {
+        const existing = document.getElementById(id);
+        if (existing && existing.parentElement) {
+          existing.parentElement.removeChild(existing);
+        }
+      });
+
+      const MAX_NODE_TOOLTIP_PROPS = 5;
+
       // Add nodes (positions will be set by layout algorithm)
       entities.forEach((entity) => {
+        const descriptionParts: string[] = [];
+        const props = entity.properties || {};
+        const entries = Object.entries(props)
+          .filter(([key, value]) => value !== null && value !== undefined && String(value).trim() !== '');
+
+        entries.slice(0, MAX_NODE_TOOLTIP_PROPS).forEach(([key, value]) => {
+          let displayValue = value;
+          if (typeof value === 'number' && Math.abs(value) >= 1000) {
+            displayValue = new Intl.NumberFormat().format(value);
+          }
+          descriptionParts.push(`${this.formatLabel(key)}: ${displayValue}`);
+        });
+
+        const description = descriptionParts.join('\n');
         (this.responseGraphInstance as any).addNode(entity.id, {
           label: entity.name,
           x: 0,
           y: 0,
           size: 10,
-          color: typeColors[entity.type] || '#94a3b8'
+          color: typeColors[entity.type] || '#94a3b8',
+          description
         });
       });
 
       // Add edges
-      relationships.forEach((rel, index) => {
-        const hasSource = (this.responseGraphInstance as any).hasNode(rel.from_entity_id);
-        const hasTarget = (this.responseGraphInstance as any).hasNode(rel.to_entity_id);
+      const normalizedRelationships: Array<{
+        key: string;
+        from: string;
+        to: string;
+        label: string;
+        properties: Record<string, any>;
+      }> = [];
+      const edgeDataByKey = new Map<string, any>();
+      const MAX_EDGE_TOOLTIP_PROPS = 5;
+
+      relationships.forEach((rel) => {
+        const sourceId = rel.from_entity_id || rel.source || rel.from || rel.start || rel.head;
+        const targetId = rel.to_entity_id || rel.target || rel.to || rel.end || rel.tail;
+        if (!sourceId || !targetId) {
+          return;
+        }
+
+        const type = rel.relationship_type || rel.type || rel.label || 'RELATED_TO';
+        const relProps: Record<string, any> = { ...(rel.properties || {}) };
+
+        if (rel.explanation && !relProps['explanation']) {
+          relProps['explanation'] = rel.explanation;
+        }
+        if (rel.reasoning && !relProps['reasoning']) {
+          relProps['reasoning'] = rel.reasoning;
+        }
+        if (rel.confidence !== undefined && relProps['confidence'] === undefined) {
+          relProps['confidence'] = rel.confidence;
+        }
+        if (rel.impact && !relProps['impact']) {
+          relProps['impact'] = rel.impact;
+        }
+        if (rel.source_description && !relProps['sourceDescription']) {
+          relProps['sourceDescription'] = rel.source_description;
+        }
+        if (rel.citations && !relProps['citations']) {
+          relProps['citations'] = rel.citations;
+        }
+
+        const edgeKey = `edge_${normalizedRelationships.length}`;
+        normalizedRelationships.push({
+          key: edgeKey,
+          from: sourceId,
+          to: targetId,
+          label: type,
+          properties: relProps
+        });
+        edgeDataByKey.set(edgeKey, {
+          ...rel,
+          relationship_type: type,
+          from_entity_id: sourceId,
+          to_entity_id: targetId,
+          properties: relProps
+        });
+      });
+
+      normalizedRelationships.forEach((rel) => {
+        const hasSource = (this.responseGraphInstance as any).hasNode(rel.from);
+        const hasTarget = (this.responseGraphInstance as any).hasNode(rel.to);
 
         if (hasSource && hasTarget) {
+          const relProps = rel.properties || {};
+          const relDescriptionParts: string[] = [];
+          const relEntries = Object.entries(relProps)
+            .filter(([key, value]) => value !== null && value !== undefined && String(value).trim() !== '');
+
+          relEntries.slice(0, MAX_EDGE_TOOLTIP_PROPS).forEach(([key, value]) => {
+            relDescriptionParts.push(`${this.formatLabel(key)}: ${value}`);
+          });
+
+          const relDescription = relDescriptionParts.join('\n');
           (this.responseGraphInstance as any).addEdgeWithKey(
-            `edge_${index}`,
-            rel.from_entity_id,
-            rel.to_entity_id,
+            rel.key,
+            rel.from,
+            rel.to,
             {
-              label: rel.relationship_type || 'RELATED_TO',
+              label: rel.label || 'RELATED_TO',
               size: 2,
               color: '#ef4444',
-              type: 'arrow'
+              type: 'arrow',
+              description: relDescription
             }
           );
         }
@@ -1429,13 +2353,38 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
       this.applyLayout(this.responseGraphInstance, this.responseGraphLayout);
 
       // Create Sigma instance
+      const responseSigmaSettings = {
+        // Node rendering
+        renderLabels: true,
+        labelSize: 10,
+        labelWeight: 'normal',
+        labelColor: { color: '#1f2937' },
+        defaultNodeColor: '#10b981',
+        minNodeSize: 5,
+        maxNodeSize: 15,
+
+        // Edge rendering
+        renderEdgeLabels: true,
+        edgeLabelSize: 10,
+        edgeLabelColor: { color: '#6b7280' },
+        edgeLabelWeight: 'normal',
+        defaultEdgeColor: '#ef4444',
+        defaultEdgeType: 'arrow',
+        minEdgeSize: 1,
+        maxEdgeSize: 4,
+
+        // Interaction behaviour
+        hideEdgesOnMove: false,
+        hideLabelsOnMove: false,
+        enableEdgeHoverEvents: true,
+        enableEdgeClickEvents: true,
+        enableEdgeEvents: true
+      };
+
       this.responseSigmaInstance = new Sigma(
         this.responseGraphInstance,
         this.responseGraphContainer.nativeElement,
-        {
-          renderLabels: true,
-          renderEdgeLabels: true
-        } as any
+        responseSigmaSettings as any
       );
 
       console.log('Response graph rendered successfully');
@@ -1451,17 +2400,98 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
         draggedNode = e.node;
         (this.responseGraphInstance as any).setNodeAttribute(draggedNode, 'highlighted', true);
         container.style.cursor = 'grabbing';
+
+        const attrs = (this.responseGraphInstance as any).getNodeAttributes(draggedNode);
+        const description = attrs?.description;
+        if (description) {
+          let tooltip = document.getElementById('response-node-tooltip');
+          if (!tooltip) {
+            tooltip = document.createElement('div');
+            tooltip.id = 'response-node-tooltip';
+            tooltip.style.position = 'fixed';
+            tooltip.style.backgroundColor = 'rgba(31, 41, 55, 0.95)';
+            tooltip.style.color = 'white';
+            tooltip.style.padding = '8px 12px';
+            tooltip.style.borderRadius = '6px';
+            tooltip.style.fontSize = '12px';
+            tooltip.style.maxWidth = '260px';
+            tooltip.style.pointerEvents = 'none';
+            tooltip.style.zIndex = '10000';
+            tooltip.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1)';
+            document.body.appendChild(tooltip);
+          }
+          tooltip.innerHTML = `
+            <div style="font-weight:600;margin-bottom:4px">${attrs?.label || 'Entity'}</div>
+            <div style="white-space:pre-wrap;color:#d1d5db;font-size:11px">${description}</div>
+          `;
+          tooltip.style.display = 'block';
+          const updateTooltipPosition = (e: MouseEvent) => {
+            if (tooltip) {
+              tooltip.style.left = (e.clientX + 15) + 'px';
+              tooltip.style.top = (e.clientY + 15) + 'px';
+            }
+          };
+          container.addEventListener('mousemove', updateTooltipPosition);
+          (tooltip as any)._removeListener = () => {
+            container.removeEventListener('mousemove', updateTooltipPosition);
+          };
+        }
       });
 
       // Hover on node - show grab cursor
-      this.responseSigmaInstance.on('enterNode', () => {
+      this.responseSigmaInstance.on('enterNode', (event: any) => {
         container.style.cursor = 'grab';
+
+        const nodeId = event.node;
+        const attrs = (this.responseGraphInstance as any).getNodeAttributes(nodeId);
+        const description = attrs?.description;
+        if (description) {
+          let tooltip = document.getElementById('response-node-tooltip');
+          if (!tooltip) {
+            tooltip = document.createElement('div');
+            tooltip.id = 'response-node-tooltip';
+            tooltip.style.position = 'fixed';
+            tooltip.style.backgroundColor = 'rgba(31, 41, 55, 0.95)';
+            tooltip.style.color = 'white';
+            tooltip.style.padding = '8px 12px';
+            tooltip.style.borderRadius = '6px';
+            tooltip.style.fontSize = '12px';
+            tooltip.style.maxWidth = '260px';
+            tooltip.style.pointerEvents = 'none';
+            tooltip.style.zIndex = '10000';
+            tooltip.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1)';
+            document.body.appendChild(tooltip);
+          }
+          tooltip.innerHTML = `
+            <div style="font-weight:600;margin-bottom:4px">${attrs?.label || 'Entity'}</div>
+            <div style="white-space:pre-wrap;color:#d1d5db;font-size:11px">${description}</div>
+          `;
+          tooltip.style.display = 'block';
+
+          const updateTooltipPosition = (e: MouseEvent) => {
+            if (tooltip) {
+              tooltip.style.left = (e.clientX + 15) + 'px';
+              tooltip.style.top = (e.clientY + 15) + 'px';
+            }
+          };
+          container.addEventListener('mousemove', updateTooltipPosition);
+          (tooltip as any)._removeListener = () => {
+            container.removeEventListener('mousemove', updateTooltipPosition);
+          };
+        }
       });
 
       // Leave node - reset cursor
       this.responseSigmaInstance.on('leaveNode', () => {
         if (!isDragging) {
           container.style.cursor = 'default';
+        }
+        const tooltip = document.getElementById('response-node-tooltip');
+        if (tooltip) {
+          tooltip.style.display = 'none';
+          if ((tooltip as any)._removeListener) {
+            (tooltip as any)._removeListener();
+          }
         }
       });
 
@@ -1490,6 +2520,13 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
         }
         isDragging = false;
         container.style.cursor = 'default';
+        const tooltip = document.getElementById('response-node-tooltip');
+        if (tooltip) {
+          tooltip.style.display = 'none';
+          if ((tooltip as any)._removeListener) {
+            (tooltip as any)._removeListener();
+          }
+        }
       });
 
       // Mouse leave container - end drag
@@ -1500,6 +2537,98 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
         }
         isDragging = false;
         container.style.cursor = 'default';
+        const tooltip = document.getElementById('response-node-tooltip');
+        if (tooltip) {
+          tooltip.style.display = 'none';
+          if ((tooltip as any)._removeListener) {
+            (tooltip as any)._removeListener();
+          }
+        }
+      });
+
+      // Edge hover - show details tooltip
+      this.responseSigmaInstance.on('enterEdge', (event: any) => {
+        const edgeKey = event.edge;
+        const edgeData = edgeDataByKey.get(edgeKey);
+        if (!edgeData) {
+          return;
+        }
+
+        const props = edgeData.properties || {};
+        const explanation = props['reasoning'] || props['explanation'] || edgeData.explanation || 'No explanation provided';
+        const impact = props['impact'] || props['effect'] || props['insight'];
+        const confidenceValue = props['confidence'] ?? edgeData.confidence;
+        const confidence = typeof confidenceValue === 'number'
+          ? `${Math.round(confidenceValue * 100)}%`
+          : (confidenceValue || null);
+        const detectedBy = props['detected_by'] || props['source'] || edgeData.detected_by;
+
+        let tooltip = document.getElementById('response-edge-tooltip');
+        if (!tooltip) {
+          tooltip = document.createElement('div');
+          tooltip.id = 'response-edge-tooltip';
+          tooltip.style.position = 'fixed';
+          tooltip.style.backgroundColor = 'rgba(17, 24, 39, 0.95)';
+          tooltip.style.color = 'white';
+          tooltip.style.padding = '8px 12px';
+          tooltip.style.borderRadius = '6px';
+          tooltip.style.fontSize = '12px';
+          tooltip.style.maxWidth = '320px';
+          tooltip.style.pointerEvents = 'none';
+          tooltip.style.zIndex = '10000';
+          tooltip.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1)';
+          document.body.appendChild(tooltip);
+        }
+
+        const citationArray = props['citations'];
+        const citationText = Array.isArray(citationArray) && citationArray.length > 0
+          ? `<div style="color:#9ca3af;font-size:10px;margin-top:4px">Citation: ${citationArray[0]}</div>`
+          : '';
+
+        tooltip.innerHTML = `
+          <div style="margin-bottom:4px;font-weight:600">${edgeData.relationship_type || 'RELATIONSHIP'}</div>
+          <div style="color:#d1d5db;font-size:11px;white-space:pre-wrap">${explanation}</div>
+          ${impact ? `<div style="color:#fbbf24;font-size:11px;margin-top:4px">Impact: ${impact}</div>` : ''}
+          ${confidence ? `<div style="color:#34d399;font-size:10px;margin-top:4px">Confidence: ${confidence}</div>` : ''}
+          ${detectedBy ? `<div style="color:#9ca3af;font-size:10px;margin-top:4px">Detected by: ${detectedBy}</div>` : ''}
+          ${citationText}
+        `;
+        tooltip.style.display = 'block';
+
+        const updateTooltipPosition = (e: MouseEvent) => {
+          if (tooltip) {
+            tooltip.style.left = (e.clientX + 15) + 'px';
+            tooltip.style.top = (e.clientY + 15) + 'px';
+          }
+        };
+        container.addEventListener('mousemove', updateTooltipPosition);
+        (tooltip as any)._removeListener = () => {
+          container.removeEventListener('mousemove', updateTooltipPosition);
+        };
+      });
+
+      this.responseSigmaInstance.on('leaveEdge', () => {
+        const tooltip = document.getElementById('response-edge-tooltip');
+        if (tooltip) {
+          tooltip.style.display = 'none';
+          if ((tooltip as any)._removeListener) {
+            (tooltip as any)._removeListener();
+          }
+        }
+      });
+
+      this.responseSigmaInstance.on('clickEdge', (event: any) => {
+        const edgeKey = event.edge;
+        const edgeData = edgeDataByKey.get(edgeKey);
+        if (!edgeData) {
+          return;
+        }
+        console.group('🔗 Response Relationship');
+        console.log('Type:', edgeData.relationship_type || 'RELATIONSHIP');
+        console.log('From:', edgeData.from_entity_id || edgeData.source || edgeData.from || edgeData.start);
+        console.log('To:', edgeData.to_entity_id || edgeData.target || edgeData.to || edgeData.end);
+        console.log('Properties:', edgeData.properties);
+        console.groupEnd();
       });
 
       this.responseSigmaInstance.refresh();

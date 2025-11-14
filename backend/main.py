@@ -636,7 +636,8 @@ async def index_graph(graph_id: str):
                     document_id=document_id,
                     markdown=markdown,
                     filename=document.filename,
-                    entities=entities
+                    entities=entities,
+                    total_pages=document.total_pages  # Pass actual page count for accurate page numbering
                 )
             documents_store[document_id].status = DocumentStatus.INDEXED
         
@@ -940,6 +941,8 @@ async def get_entities_by_graph(graph_id: str):
             entity_dict = {
                 "id": entity.id,
                 "type": entity.type.value if hasattr(entity.type, 'value') else str(entity.type),
+                "display_type": entity.display_type,
+                "original_type": entity.original_type,
                 "name": entity.name,
                 "properties": entity.properties,
                 "document_id": entity.document_id,

@@ -25,19 +25,64 @@ class RelationshipDetector:
             aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY
         )
         
-        # Map string edge types to EdgeType enum
-        self.edge_type_mapping = {
-            "ISSUED_BY": EdgeType.ISSUED_BY,
-            "HAS_LOAN": EdgeType.HAS_LOAN,
-            "OWNS": EdgeType.OWNS,
-            "HAS_METRIC": EdgeType.HAS_METRIC,
-            "LOCATED_IN": EdgeType.LOCATED_IN,
-            "WORKS_FOR": EdgeType.WORKS_FOR,
-            "SUBSIDIARY_OF": EdgeType.SUBSIDIARY_OF,
-            "REPORTS_TO": EdgeType.REPORTS_TO,
-            "SUPPLIES_TO": EdgeType.SUPPLIES_TO,
-            "RELATED_TO": EdgeType.RELATED_TO,
-            "MENTIONED_IN": EdgeType.MENTIONED_IN,
+        # Map string edge types to EdgeType enum (case-insensitive)
+        self.edge_type_mapping = {}
+        for edge_type in EdgeType:
+            canonical = edge_type.value.upper()
+            self.edge_type_mapping[canonical] = edge_type
+            self.edge_type_mapping[edge_type.name.upper()] = edge_type
+
+        # Synonyms/aliases produced by the LLM mapped to canonical EdgeType values
+        self.edge_type_aliases = {
+            "OWNER_OF": EdgeType.OWNS,
+            "OWNED_BY": EdgeType.SUBSIDIARY_OF,
+            "PARENT_OF": EdgeType.OWNS,
+            "PARENT_COMPANY": EdgeType.OWNS,
+            "CHILD_OF": EdgeType.SUBSIDIARY_OF,
+            "SUBSIDIARY": EdgeType.SUBSIDIARY_OF,
+            "PARTNER_OF": EdgeType.PARTNERS_WITH,
+            "PARTNERS_WITH": EdgeType.PARTNERS_WITH,
+            "PARTNERSHIP_WITH": EdgeType.PARTNERS_WITH,
+            "PROVIDES_SERVICES_TO": EdgeType.PROVIDES_SERVICE_FOR,
+            "PROVIDES_SERVICE_TO": EdgeType.PROVIDES_SERVICE_FOR,
+            "PROVIDES_SERVICE": EdgeType.PROVIDES_SERVICE_FOR,
+            "PROVIDES_TO": EdgeType.PROVIDES_SERVICE_FOR,
+            "SUPPLIES": EdgeType.SUPPLIES_TO,
+            "SUPPLIES_FOR": EdgeType.SUPPLIES_TO,
+            "SUPPLIER_OF": EdgeType.SUPPLIES_TO,
+            "RECEIVES_SERVICE": EdgeType.RECEIVES_SERVICE_FROM,
+            "RECEIVES_SERVICES_FROM": EdgeType.RECEIVES_SERVICE_FROM,
+            "CUSTOMER_OF": EdgeType.RECEIVES_SERVICE_FROM,
+            "CLIENT_OF": EdgeType.RECEIVES_SERVICE_FROM,
+            "INVESTED": EdgeType.INVESTED_IN,
+            "INVESTED_INTO": EdgeType.INVESTED_IN,
+            "INVESTOR_IN": EdgeType.INVESTED_IN,
+            "ACQUIRED_BY": EdgeType.ACQUIRED,
+            "ACQUIRES": EdgeType.ACQUIRED,
+            "GUARANTEED_BY": EdgeType.GUARANTEES,
+            "GUARANTEE_OF": EdgeType.GUARANTEES,
+            "GUARANTOR": EdgeType.GUARANTEES,
+            "LOANED_BY": EdgeType.FINANCED_BY,
+            "FINANCED": EdgeType.FINANCED_BY,
+            "FINANCED_BY": EdgeType.FINANCED_BY,
+            "BORROWS_FROM": EdgeType.FINANCED_BY,
+            "OWES_TO": EdgeType.OWES,
+            "OWES_TOWARDS": EdgeType.OWES,
+            "DEBT_TO": EdgeType.OWES,
+            "ISSUED_TO": EdgeType.ISSUED_BY,
+            "REGULATED": EdgeType.REGULATED_BY,
+            "REGULATED_BY": EdgeType.REGULATED_BY,
+            "REPORTS_ON": EdgeType.REPORTS_ON,
+            "REPORTS_ABOUT": EdgeType.REPORTS_ON,
+            "REFERENCED_IN": EdgeType.MENTIONED_IN,
+            "MENTIONS": EdgeType.REFERENCES,
+            "MENTIONED_BY": EdgeType.REFERENCES,
+            "DOCUMENTS": EdgeType.REPORTS_ON,
+            "CONNECTED_TO": EdgeType.RELATED_TO,
+            "ASSOCIATED_TO": EdgeType.ASSOCIATED_WITH,
+            "ASSOCIATED_WITH": EdgeType.ASSOCIATED_WITH,
+            "RELATES_TO": EdgeType.RELATED_TO,
+            "LINKED_TO": EdgeType.RELATED_TO,
         }
     
     async def detect_relationships_chunked(
@@ -88,6 +133,29 @@ class RelationshipDetector:
     def _chunk_entities(self, entities: List[Entity], chunk_size: int) -> List[List[Entity]]:
         """Split entities into manageable chunks"""
         return [entities[i:i + chunk_size] for i in range(0, len(entities), chunk_size)]
+
+    def _normalize_edge_type(self, raw_edge_type: str) -> EdgeType:
+        """
+        Map an arbitrary edge type string from the LLM to a canonical EdgeType.
+        Falls back to RELATED_TO if no mapping is found.
+        """
+        if not raw_edge_type:
+            logger.warning("Received empty edge_type from LLM; defaulting to RELATED_TO")
+            return EdgeType.RELATED_TO
+
+        key = str(raw_edge_type).strip().upper()
+        key = key.replace("-", "_").replace(" ", "_")
+
+        if key in self.edge_type_mapping:
+            return self.edge_type_mapping[key]
+
+        if key in self.edge_type_aliases:
+            canonical = self.edge_type_aliases[key]
+            logger.debug(f"Mapped edge type alias '{raw_edge_type}' -> '{canonical.value}'")
+            return canonical
+
+        logger.warning(f"Unknown edge type '{raw_edge_type}', defaulting to RELATED_TO")
+        return EdgeType.RELATED_TO
     
     async def _detect_relationships_in_chunk(
         self,
@@ -210,7 +278,7 @@ Provide relationships in JSON format."""
                 
                 # Map string edge type to enum
                 edge_type_str = rel.get('edge_type', 'RELATED_TO')
-                edge_type = self.edge_type_mapping.get(edge_type_str, EdgeType.RELATED_TO)
+                edge_type = self._normalize_edge_type(edge_type_str)
                 
                 edge = Edge(
                     id=f"edge_{uuid.uuid4().hex[:12]}",
@@ -221,7 +289,8 @@ Provide relationships in JSON format."""
                     properties={
                         "confidence": confidence,
                         "reasoning": rel.get('reasoning', ''),
-                        "detected_by": "llm"
+                        "detected_by": "llm",
+                        "raw_edge_type": edge_type_str
                     }
                 )
                 edges.append(edge)

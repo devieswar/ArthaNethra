@@ -6,7 +6,7 @@ import re
 import uuid
 import json
 import boto3
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from bs4 import BeautifulSoup
 from loguru import logger
 
@@ -116,6 +116,8 @@ class NarrativeParser:
                         id=f"entity_{uuid.uuid4().hex[:12]}",
                         name=entity_text,
                         type=our_type,
+                        display_type=self._format_display_type(entity_type, our_type, entity_text),
+                        original_type=entity_type,
                         properties={
                             "extracted_from": "narrative_text",
                             "source_type": entity_type,
@@ -178,6 +180,8 @@ class NarrativeParser:
                 id=f"risk_{uuid.uuid4().hex[:12]}",
                 name=risk_text[:100],  # Use first 100 chars as name
                 type=EntityType.CLAUSE,
+                display_type="Risk",
+                original_type="RISK",
                 properties={
                     "description": risk_text,
                     "full_text": para[:500],  # Store up to 500 chars of context
@@ -388,11 +392,18 @@ Provide JSON response."""
                 
                 entity_type_str = ent_data.get("type", "RISK")
                 entity_type = self._map_llm_entity_type(entity_type_str)
+                display_type = ent_data.get("display_type") or self._format_display_type(
+                    entity_type_str,
+                    entity_type,
+                    entity_name
+                )
                 
                 entity = Entity(
                     id=f"entity_{uuid.uuid4().hex[:12]}",
                     name=entity_name,
                     type=entity_type,
+                    display_type=display_type,
+                    original_type=entity_type_str,
                     properties={
                         **ent_data.get("properties", {}),
                         "extracted_from": "narrative_llm",
@@ -477,4 +488,17 @@ Provide JSON response."""
             "CONCEPT": EntityType.CLAUSE,
         }
         return mapping.get(llm_type.upper(), EntityType.CLAUSE)
+
+    def _format_display_type(self, raw_type: Optional[str], fallback: EntityType, name: Optional[str]) -> str:
+        if raw_type:
+            label = raw_type.strip()
+            if label:
+                if label.lower().startswith("entitytype."):
+                    label = label.split(".", 1)[-1]
+                if label.isupper():
+                    label = label.replace("_", " ").title()
+                return label
+        if name:
+            return name
+        return fallback.value
 

@@ -3,7 +3,7 @@ Graph normalization service - converts ADE output to graph entities and edges
 """
 import uuid
 import json
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from loguru import logger
 
 from models.entity import Entity, EntityType
@@ -331,10 +331,14 @@ class NormalizationService:
         
         # Process extracted entities
         for entity_data in ade_output.get("entities", []):
-            entity_type = self._map_entity_type(entity_data.get("type"))
-            
-            if not entity_type:
-                continue
+            raw_type = entity_data.get("type")
+            entity_type = self._map_entity_type(raw_type) or EntityType.CLAUSE
+            display_type = self._format_display_type(
+                raw_type,
+                entity_type,
+                entity_data.get("properties", {}),
+                entity_data.get("name")
+            )
             
             # Create citations
             citations = [
@@ -342,12 +346,16 @@ class NormalizationService:
                 for citation_data in entity_data.get("citations", [])
             ]
             
+            properties = entity_data.get("properties", {}) or {}
+            
             # Create entity
             entity = Entity(
                 id=f"ent_{uuid.uuid4().hex[:12]}",
                 type=entity_type,
                 name=entity_data.get("name"),
-                properties=entity_data.get("properties", {}),
+                display_type=display_type,
+                original_type=raw_type,
+                properties=properties,
                 citations=citations,
                 document_id=document_id,
                 graph_id=graph_id
@@ -388,6 +396,8 @@ class NormalizationService:
                 summary_entity = Entity(
                     id=f"ent_{uuid.uuid4().hex[:12]}",
                     type=EntityType.CLAUSE,
+                    display_type="Summary",
+                    original_type="SUMMARY_SECTION",
                     name="Document Summary",
                     properties={"text": summary_text},
                     citations=[],
@@ -401,6 +411,8 @@ class NormalizationService:
                     metric_entity = Entity(
                         id=f"ent_{uuid.uuid4().hex[:12]}",
                         type=EntityType.METRIC,
+                        display_type=metric.get("display_type") or "Metric",
+                        original_type=metric.get("raw_type"),
                         name=metric["name"],
                         properties={"value": metric["value"], "unit": metric.get("unit")},
                         citations=[],
@@ -581,9 +593,40 @@ class NormalizationService:
         
         return unique_edges
     
-    def _map_entity_type(self, ade_type: str) -> EntityType:
+    def _map_entity_type(self, ade_type: Optional[str]) -> Optional[EntityType]:
         """Map ADE entity type to internal EntityType"""
+        if not ade_type:
+            return None
         return self.entity_type_mapping.get(ade_type.upper())
+
+    def _format_display_type(
+        self,
+        raw_type: Optional[str],
+        fallback: EntityType,
+        properties: Optional[Dict[str, Any]] = None,
+        name: Optional[str] = None
+    ) -> str:
+        """Create a human-friendly display label for an entity."""
+        if isinstance(raw_type, str):
+            label = raw_type.strip()
+            if label:
+                if label.lower().startswith("entitytype."):
+                    label = label.split(".", 1)[-1]
+                if label.isupper():
+                    label = label.replace("_", " ").title()
+                return label
+        if properties:
+            if "exhibit_no" in properties:
+                description = str(properties.get("description") or "").strip()
+                if description:
+                    return description.title()
+                return f"Exhibit {properties['exhibit_no']}"
+            if any(key.lower().startswith("metric") for key in properties.keys()):
+                return "Financial Metric"
+        if name and isinstance(name, str):
+            if "press release" in name.lower():
+                return "Press Release"
+        return fallback.value if fallback else "Entity"
 
     def _extract_metrics_from_text(self, text: str) -> List[Dict[str, Any]]:
         """Extract simple metrics from free text: percentages and currency amounts."""
@@ -699,6 +742,7 @@ class NormalizationService:
                 company = Entity(
                     id=f"ent_{uuid.uuid4().hex[:12]}",
                     type=EntityType.COMPANY,
+                    display_type="Company",
                     name=company_name,
                     properties={
                         "ticker": value.get("ticker"),
@@ -726,6 +770,8 @@ class NormalizationService:
                     lender = Entity(
                         id=f"ent_{uuid.uuid4().hex[:12]}",
                         type=EntityType.COMPANY,  # Banks/Lenders are companies
+                        display_type="Lender",
+                        original_type="LENDER",
                         name=lender_name,
                         properties={},
                         citations=[],
@@ -740,6 +786,8 @@ class NormalizationService:
                     loan = Entity(
                         id=f"ent_{uuid.uuid4().hex[:12]}",
                         type=EntityType.LOAN,
+                        display_type="Loan",
+                        original_type="LOAN",
                         name=instrument,
                         properties={
                             "lender": lender_name,
@@ -762,6 +810,7 @@ class NormalizationService:
                     metric = Entity(
                         id=f"ent_{uuid.uuid4().hex[:12]}",
                         type=EntityType.METRIC,
+                        display_type="Financial Metric",
                         name=metric_name,
                         properties={"value": metric_value},
                         citations=[],
@@ -782,6 +831,8 @@ class NormalizationService:
                     risk = Entity(
                         id=f"ent_{uuid.uuid4().hex[:12]}",
                         type=EntityType.CLAUSE,
+                        display_type="Risk Factor",
+                        original_type="RISK",
                         name=risk_title,
                         properties={"description": risk_data.get("description", "")},
                         citations=[],
@@ -947,6 +998,14 @@ Provide the normalization strategy in JSON format."""
             if not entity_name:
                 continue
             
+            raw_type = item.get("type") or strategy.get("entity_type")
+            display_type = self._format_display_type(
+                raw_type,
+                entity_type,
+                item,
+                str(entity_name)
+            )
+            
             # Extract citations if available
             citations = []
             if "citations" in item:
@@ -962,6 +1021,8 @@ Provide the normalization strategy in JSON format."""
             entity = Entity(
                 id=f"ent_{uuid.uuid4().hex[:12]}",
                 type=entity_type,
+                display_type=display_type,
+                original_type=raw_type,
                 name=str(entity_name),
                 properties=item,  # Store all fields as properties
                 citations=citations,
@@ -1017,6 +1078,14 @@ Provide the normalization strategy in JSON format."""
                 f"{key}_{uuid.uuid4().hex[:6]}"
             )
             
+            raw_type = item.get("type") or key
+            display_type = self._format_display_type(
+                raw_type,
+                entity_type,
+                item,
+                str(entity_name)
+            )
+            
             # Extract citations if available
             citations = []
             if "citations" in item:
@@ -1031,6 +1100,8 @@ Provide the normalization strategy in JSON format."""
             entity = Entity(
                 id=f"ent_{uuid.uuid4().hex[:12]}",
                 type=entity_type,
+                display_type=display_type,
+                original_type=raw_type,
                 name=str(entity_name),
                 properties=item,
                 citations=citations,

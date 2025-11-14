@@ -28,6 +28,16 @@ class Entity(BaseModel):
     type: EntityType = Field(..., description="Entity type")
     name: str = Field(..., description="Entity name")
     
+    # Human-readable/dynamic classification labels
+    display_type: Optional[str] = Field(
+        default=None,
+        description="Extractor-provided, human-friendly type label"
+    )
+    original_type: Optional[str] = Field(
+        default=None,
+        description="Raw type label returned by the upstream extractor"
+    )
+    
     # Properties extracted from documents
     properties: Dict[str, Any] = Field(default_factory=dict)
     

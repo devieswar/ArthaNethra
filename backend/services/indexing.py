@@ -20,41 +20,7 @@ class IndexingService:
         self.weaviate_client = None
         self.neo4j_driver = None
         
-        # Weaviate client (optional)
-        if getattr(settings, "ENABLE_WEAVIATE", False) and settings.WEAVIATE_URL:
-            try:
-                # Parse WEAVIATE_URL to extract host and port
-                url = settings.WEAVIATE_URL
-                if url.startswith("http://"):
-                    url = url[7:]
-                elif url.startswith("https://"):
-                    url = url[8:]
-                
-                # Extract host and port
-                if ":" in url:
-                    host, port = url.split(":")
-                    port = int(port)
-                else:
-                    host = url
-                    port = 8080
-                
-                # Connect to Weaviate
-                auth = None
-                if settings.WEAVIATE_API_KEY:
-                    auth = weaviate.auth.Auth.api_key(settings.WEAVIATE_API_KEY)
-                
-                self.weaviate_client = weaviate.connect_to_local(
-                    host=host,
-                    port=port,
-                    grpc_port=50051,
-                    auth_credentials=auth
-                )
-                logger.info(f"Weaviate connected at {host}:{port}")
-            except Exception as e:
-                logger.warning(f"Weaviate not available: {e}")
-                self.weaviate_client = None
-        else:
-            logger.info("Weaviate indexing disabled by config")
+        self._connect_weaviate()
         
         # Neo4j driver (optional)
         if getattr(settings, "ENABLE_NEO4J", False):
@@ -69,8 +35,60 @@ class IndexingService:
                 self.neo4j_driver = None
         else:
             logger.info("Neo4j indexing disabled by config")
+    
+    def _connect_weaviate(self) -> bool:
+        """Attempt to establish a connection to Weaviate if enabled."""
+        if self.weaviate_client:
+            return True
         
-        self._init_weaviate_schema()
+        if not (getattr(settings, "ENABLE_WEAVIATE", False) and settings.WEAVIATE_URL):
+            logger.info("Weaviate indexing disabled by config")
+            self.weaviate_client = None
+            return False
+        
+        try:
+            # Parse WEAVIATE_URL to extract host and port
+            url = settings.WEAVIATE_URL
+            if url.startswith("http://"):
+                url = url[7:]
+            elif url.startswith("https://"):
+                url = url[8:]
+            
+            # Extract host and port
+            if ":" in url:
+                host, port = url.split(":")
+                port = int(port)
+            else:
+                host = url
+                port = 8080
+            
+            # Connect to Weaviate
+            auth = None
+            if settings.WEAVIATE_API_KEY:
+                auth = weaviate.auth.Auth.api_key(settings.WEAVIATE_API_KEY)
+            
+            self.weaviate_client = weaviate.connect_to_local(
+                host=host,
+                port=port,
+                grpc_port=50051,
+                auth_credentials=auth
+            )
+            logger.info(f"Weaviate connected at {host}:{port}")
+            self._init_weaviate_schema()
+            return True
+        except Exception as e:
+            logger.warning(f"Weaviate not available: {e}")
+            self.weaviate_client = None
+            return False
+    
+    def ensure_weaviate_client(self) -> bool:
+        """
+        Lazily ensure that a Weaviate connection exists.
+        Useful when Weaviate was still starting up during backend boot.
+        """
+        if self.weaviate_client:
+            return True
+        return self._connect_weaviate()
     
     def _init_weaviate_schema(self):
         """Initialize Weaviate schema for entities and document chunks"""
@@ -230,7 +248,7 @@ class IndexingService:
             entities = entity_objects
         
         weaviate_count = 0
-        if self.weaviate_client:
+        if self.ensure_weaviate_client():
             weaviate_count = await self._index_to_weaviate(entities)
         
         neo4j_count = 0
@@ -244,7 +262,7 @@ class IndexingService:
             "neo4j": {"nodes_count": neo4j_count}
         }
     
-    async def index_document_text(self, document_id: str, markdown: str, filename: str, entities: List[Entity] = None) -> dict:
+    async def index_document_text(self, document_id: str, markdown: str, filename: str, entities: List[Entity] = None, total_pages: int = None) -> dict:
         """
         Chunk and index full document text for semantic search
         
@@ -253,11 +271,12 @@ class IndexingService:
             markdown: Full parsed markdown text
             filename: Original filename
             entities: Optional list of entities to link to chunks
+            total_pages: Total number of pages in the document (for accurate page numbering)
             
         Returns:
             dict: Indexing statistics
         """
-        if not self.weaviate_client:
+        if not self.ensure_weaviate_client():
             logger.warning("Weaviate not enabled, skipping document text indexing")
             return {"chunks_indexed": 0}
         
@@ -266,6 +285,17 @@ class IndexingService:
             logger.info(f"Created {len(chunks)} chunks from document {document_id}")
             
             collection = self.weaviate_client.collections.get("DocumentChunk")
+            
+            # Calculate page numbers more accurately
+            # If total_pages is provided, distribute chunks evenly across pages
+            # Otherwise, estimate 2 chunks per page and cap at a reasonable maximum
+            if total_pages and total_pages > 0:
+                # Distribute chunks evenly across actual pages
+                chunks_per_page = max(1, len(chunks) / total_pages)
+            else:
+                # Fallback: estimate 2 chunks per page
+                chunks_per_page = 2.0
+                total_pages = max(1, (len(chunks) + 1) // 2)  # Estimate total pages
             
             indexed_count = 0
             with collection.batch.fixed_size(batch_size=50) as batch:
@@ -279,12 +309,18 @@ class IndexingService:
                     
                     chunk_id = f"{document_id}_chunk_{idx}"
                     
+                    # Calculate page number: distribute chunks across pages
+                    # Page numbers are 1-indexed, so add 1
+                    estimated_page = int(idx / chunks_per_page) + 1
+                    # Cap at total_pages to prevent invalid page numbers
+                    page_number = min(estimated_page, total_pages) if total_pages else estimated_page
+                    
                     data_object = {
                         "chunkId": chunk_id,
                         "documentId": document_id,
                         "content": chunk,
                         "chunkIndex": idx,
-                        "pageNumber": idx // 2,  # Rough estimate: 2 chunks per page
+                        "pageNumber": page_number,
                         "filename": filename,
                         "entityRefs": json.dumps(entity_refs)
                     }
@@ -341,7 +377,7 @@ class IndexingService:
         Returns:
             List of matching chunks with metadata
         """
-        if not self.weaviate_client:
+        if not self.ensure_weaviate_client():
             return []
         
         try:
@@ -470,13 +506,15 @@ class IndexingService:
                             n.name = $name,
                             n.properties = $properties,
                             n.documentId = $documentId,
-                            n.graphId = $graphId
+                            n.graphId = $graphId,
+                            n.citations = $citations
                         ON MATCH SET
                             n.type = $type,
                             n.name = $name,
                             n.properties = $properties,
                             n.documentId = $documentId,
-                            n.graphId = $graphId
+                            n.graphId = $graphId,
+                            n.citations = $citations
                         RETURN n
                         """,
                         entityId=entity.id,
@@ -484,7 +522,8 @@ class IndexingService:
                         name=entity.name,
                         properties=json.dumps(entity.properties or {}),
                         documentId=entity.document_id,
-                        graphId=entity.graph_id
+                        graphId=entity.graph_id,
+                        citations=json.dumps([c.model_dump() for c in entity.citations] if entity.citations else [])
                     )
                     # Consume result to ensure query executes
                     result.consume()

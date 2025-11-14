@@ -33,6 +33,11 @@ class ChatbotService:
         """Remove internal XML/HTML tags from AI response"""
         import re
         
+        if not text or not text.strip():
+            return text
+        
+        original_length = len(text)
+        
         # Remove common internal tags that might leak into responses
         internal_tags = [
             r'<graph_quality_reflection>.*?</graph_quality_reflection>',
@@ -41,21 +46,36 @@ class ChatbotService:
             r'<reasoning>.*?</reasoning>',
             r'<internal>.*?</internal>',
             r'<debug>.*?</debug>',
+            r'<result_synthesis>.*?</result_synthesis>',
         ]
         
         cleaned_text = text
         for tag_pattern in internal_tags:
             cleaned_text = re.sub(tag_pattern, '', cleaned_text, flags=re.DOTALL | re.IGNORECASE)
         
-        # Remove any remaining XML-style tags (but preserve markdown links)
-        # This catches any other <tag>content</tag> patterns
-        cleaned_text = re.sub(r'<(?!\/?)([a-z_][a-z0-9_]*)[^>]*>.*?</\1>', '', cleaned_text, flags=re.DOTALL | re.IGNORECASE)
+        # Remove any standalone opening tags that don't have closing tags (fallback)
+        # Only remove known internal tags, not all tags
+        cleaned_text = re.sub(r'<(result_synthesis|graph_quality_reflection|graph_quality_score|thinking|reasoning|internal|debug)[^>]*>', '', cleaned_text, flags=re.IGNORECASE)
         
-        return cleaned_text.strip()
+        # Only remove closing tags for known internal tags
+        cleaned_text = re.sub(r'</(result_synthesis|graph_quality_reflection|graph_quality_score|thinking|reasoning|internal|debug)>', '', cleaned_text, flags=re.IGNORECASE)
+        
+        cleaned_text = cleaned_text.strip()
+        
+        # Safety check: if sanitization removed more than 90% of content, something went wrong
+        # Return original text (with basic tag removal only) to preserve user-facing content
+        if original_length > 0 and len(cleaned_text) < (original_length * 0.1):
+            logger.warning(f"Sanitization removed too much content ({len(cleaned_text)}/{original_length} chars). Preserving original with minimal cleaning.")
+            # Only remove the most obvious internal tags, preserve everything else
+            minimal_clean = re.sub(r'<(result_synthesis|graph_quality_reflection|graph_quality_score)[^>]*>', '', text, flags=re.IGNORECASE)
+            minimal_clean = re.sub(r'</(result_synthesis|graph_quality_reflection|graph_quality_score)>', '', minimal_clean, flags=re.IGNORECASE)
+            return minimal_clean.strip()
+        
+        return cleaned_text
     
     def _invoke_with_fallback(self, body_dict: dict, models_to_try: list = None) -> dict:
         """
-        Invoke Claude model with automatic fallback on throttling
+        Invoke Claude model with automatic fallback on throttling and exponential backoff retry
         
         Args:
             body_dict: Request body with inferenceConfig format
@@ -64,51 +84,78 @@ class ChatbotService:
         Returns:
             Response body dict
         """
+        import time
+        
         if models_to_try is None:
             models_to_try = [self.model_id] + self.fallback_models
         
         last_error = None
         for model_id in models_to_try:
-            try:
-                logger.info(f"Trying model: {model_id}")
-                
-                # Convert to Claude format
-                request_body = {
-                    "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": body_dict.get("inferenceConfig", {}).get("maxTokens", 4096),
-                    "temperature": body_dict.get("inferenceConfig", {}).get("temperature", 0.7),
-                    "messages": body_dict["messages"]
-                }
-                
-                # Add system prompt if present
-                if "system" in body_dict:
-                    system = body_dict["system"]
-                    request_body["system"] = system[0]["text"] if isinstance(system, list) else system
-                
-                # Add tools if present
-                if "tools" in body_dict:
-                    request_body["tools"] = body_dict["tools"]
-                
-                response = self.bedrock.invoke_model(
-                    modelId=model_id,
-                    body=json.dumps(request_body)
-                )
-                response_body = json.loads(response['body'].read())
-                logger.info(f"Success with model: {model_id}")
-                return response_body
-                
-            except Exception as e:
-                error_str = str(e)
-                if "ThrottlingException" in error_str or "Too many requests" in error_str or "throttled" in error_str.lower():
-                    logger.warning(f"Model {model_id} throttled, trying next model...")
-                    last_error = e
-                    continue
-                else:
-                    logger.error(f"Error with model {model_id}: {e}")
-                    raise
+            # Retry with exponential backoff for throttling (up to 3 retries per model)
+            max_retries = 3
+            base_delay = 1  # Start with 1 second
+            
+            for retry_attempt in range(max_retries + 1):
+                try:
+                    if retry_attempt > 0:
+                        # Exponential backoff: 1s, 2s, 4s
+                        delay = base_delay * (2 ** (retry_attempt - 1))
+                        logger.info(f"Retrying model {model_id} after {delay}s (attempt {retry_attempt}/{max_retries})...")
+                        time.sleep(delay)
+                    else:
+                        logger.info(f"Trying model: {model_id}")
+                    
+                    # Convert to Claude format
+                    request_body = {
+                        "anthropic_version": "bedrock-2023-05-31",
+                        "max_tokens": body_dict.get("inferenceConfig", {}).get("maxTokens", 4096),
+                        "temperature": body_dict.get("inferenceConfig", {}).get("temperature", 0.7),
+                        "messages": body_dict["messages"]
+                    }
+                    
+                    # Add system prompt if present
+                    if "system" in body_dict:
+                        system = body_dict["system"]
+                        request_body["system"] = system[0]["text"] if isinstance(system, list) else system
+                    
+                    # Add tools if present
+                    if "tools" in body_dict:
+                        request_body["tools"] = body_dict["tools"]
+                    
+                    response = self.bedrock.invoke_model(
+                        modelId=model_id,
+                        body=json.dumps(request_body)
+                    )
+                    response_body = json.loads(response['body'].read())
+                    logger.info(f"Success with model: {model_id}")
+                    return response_body
+                    
+                except Exception as e:
+                    error_str = str(e)
+                    is_throttled = (
+                        "ThrottlingException" in error_str or 
+                        "Too many requests" in error_str or 
+                        "throttled" in error_str.lower() or
+                        "429" in error_str
+                    )
+                    
+                    if is_throttled:
+                        if retry_attempt < max_retries:
+                            # Will retry with backoff
+                            last_error = e
+                            continue
+                        else:
+                            # Max retries reached for this model, try next model
+                            logger.warning(f"Model {model_id} throttled after {max_retries} retries, trying next model...")
+                            last_error = e
+                            break  # Break retry loop, move to next model
+                    else:
+                        # Non-throttling error, don't retry
+                        logger.error(f"Error with model {model_id}: {e}")
+                        raise
         
         # All models failed
-        raise Exception(f"All models throttled or failed. Last error: {last_error}")
+        raise Exception(f"All models throttled or failed after retries. Last error: {last_error}")
     
     def _initialize_tools(self) -> list:
         """Initialize and return tool definitions for Bedrock"""
@@ -433,6 +480,7 @@ IMPORTANT INSTRUCTIONS:
 - The document_search results are MANDATORY - you cannot skip this step
 - After receiving document_search results, use them to formulate your answer
 - If tool returns 0 results, say something natural like: "I didn't find any information about this in the uploaded documents"
+- **BE DECISIVE:** After 1-2 document searches, provide your answer. Do NOT keep searching with similar queries - synthesize what you have and answer the question. Avoid redundant searches that use similar keywords.
 - When metrics return a "message" field, translate it to natural language (don't say "the metric returned a message")
 - When responding to the analyst, speak in final conclusions. Do NOT narrate internal steps like "I'll search" or "Let me check"; go straight to the findings and evidence.
 - Extract property names from the question using EXACT field names:
@@ -521,6 +569,8 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
             # Tool execution loop - allow multiple rounds of tool calls
             max_iterations = 3  # Allow up to 3 iterations for complex queries
             iteration = 0
+            previous_queries = []  # Track search queries to detect redundancy
+            force_final_answer = False  # Flag to force answer if redundant searches detected
             
             while iteration < max_iterations:
                 iteration += 1
@@ -543,14 +593,30 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
                 response_body = self._invoke_with_fallback(request_body)
                 content_blocks = response_body.get("content", [])
                 
+                # Log response structure for debugging (especially in final iteration)
+                if iteration >= 2:  # Log in later iterations when issues occur
+                    logger.info(f"Iteration {iteration}: Response has {len(content_blocks)} content blocks")
+                    for i, block in enumerate(content_blocks):
+                        block_type = block.get('type')
+                        has_text_field = 'text' in block
+                        text_preview = block.get('text', '')[:50] if has_text_field else 'N/A'
+                        logger.info(f"  Block {i}: type={block_type}, has_text={has_text_field}, preview={text_preview}")
+                
                 # Stream any text back to the UI (with sanitization)
                 has_text = False
+                text_blocks = []
                 for block in content_blocks:
                     if block["type"] == "text":
                         # Sanitize response to remove internal tags
-                        sanitized_text = self._sanitize_response(block["text"])
+                        original_text = block.get("text", "")
+                        sanitized_text = self._sanitize_response(original_text)
                         if sanitized_text:  # Only yield if there's content after sanitization
                             yield sanitized_text
+                            text_blocks.append(sanitized_text)
+                            logger.info(f"Yielded text block: {len(sanitized_text)} chars")
+                        elif original_text:
+                            # Log if sanitization removed all content
+                            logger.warning(f"Sanitization removed all content from text block (original length: {len(original_text)}, preview: {original_text[:100]})")
                         has_text = True
                 
                 # Check if there are tool calls to execute
@@ -567,6 +633,21 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
                     tool_use_id = block["id"]
                     
                     logger.info(f"Executing tool: {tool_name} with input: {tool_input}")
+                    
+                    # Track document_search queries to detect redundancy
+                    if tool_name == "document_search":
+                        query = tool_input.get("query", "")
+                        previous_queries.append(query.lower())
+                        # If we have 2+ similar searches, force answer after this one
+                        if len(previous_queries) >= 2:
+                            # Simple similarity check: if queries share many words, they're redundant
+                            words_in_current = set(query.lower().split())
+                            for prev_query in previous_queries[:-1]:  # Check all previous except current
+                                words_in_prev = set(prev_query.split())
+                                overlap = len(words_in_current & words_in_prev)
+                                if overlap >= 3:  # 3+ common words = likely redundant
+                                    logger.warning(f"Detected redundant search (overlap: {overlap} words). Will force answer after this iteration.")
+                                    force_final_answer = True
                     
                     try:
                         tool_result = await self._execute_tool(tool_name, tool_input, context)
@@ -616,10 +697,52 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
                         role = msg.get("role")
                         content_summary = f"{len(msg.get('content', []))} blocks" if isinstance(msg.get('content'), list) else "string"
                         logger.info(f"   [{i}] {role}: {content_summary}")
+                    
+                    # If we're at max iterations OR detected redundant searches, force a final response without tools
+                    if iteration >= max_iterations or force_final_answer:
+                        reason = "redundant searches detected" if force_final_answer else f"max iterations ({max_iterations})"
+                        logger.warning(f"Forcing final response without tools: {reason}")
+                        # Make one final call without tools to get the answer
+                        final_request = {
+                            "messages": messages,
+                            "inferenceConfig": {
+                                "maxTokens": 4096,
+                                "temperature": 0.7,
+                                "topP": 0.9
+                            }
+                            # No tools - force text-only response
+                        }
+                        if system_prompt:
+                            final_request["system"] = [{"text": system_prompt}]
+                        
+                        # Add instruction to provide final answer
+                        final_request["messages"].append({
+                            "role": "user",
+                            "content": "Based on all the information you've gathered, please provide your final answer to the user's question. Do not use any tools - just provide a comprehensive answer with citations."
+                        })
+                        
+                        try:
+                            final_response = self._invoke_with_fallback(final_request)
+                            final_blocks = final_response.get("content", [])
+                            for block in final_blocks:
+                                if block.get("type") == "text":
+                                    original_text = block.get("text", "")
+                                    sanitized_text = self._sanitize_response(original_text)
+                                    if sanitized_text:
+                                        yield sanitized_text
+                                        logger.info(f"Yielded final response: {len(sanitized_text)} chars")
+                        except Exception as e:
+                            logger.error(f"Error getting final response: {e}")
+                            yield "I've gathered information from the documents, but encountered an issue generating the final response. Please try rephrasing your question."
+                        break
+                    
                     # Continue loop to let AI process tool results
                 else:
                     # No more tool calls, we're done
                     logger.info(f"No more tool calls, conversation complete after {iteration} iterations")
+                    # If we have text blocks but didn't yield them (shouldn't happen, but safety check)
+                    if has_text and not text_blocks:
+                        logger.warning("Conversation completed but no text was yielded - this may indicate sanitization issue")
                     break
         
         except Exception as e:
@@ -669,6 +792,8 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
                         f"Neo4j query returned {len(neo4j_results)} results (graph_id: {graph_id}, entity_types: {entity_types})"
                     )
                     if neo4j_results:
+                        for entity in neo4j_results:
+                            entity["citations"] = self._normalize_citations(entity.get("citations"))
                         combined_results.extend(neo4j_results)
                         sources.append("neo4j_filtered")
                 except Exception as e:
@@ -690,6 +815,10 @@ Only include entities and relationships that are EXPLICITLY mentioned in your re
                             result["type"] = result["entityType"]
                         if "entityId" in result and "id" not in result:
                             result["id"] = result["entityId"]
+                        document_id = result.get("document_id") or result.get("documentId")
+                        if document_id:
+                            result["document_id"] = document_id
+                        result["citations"] = self._normalize_citations(result.get("citations"))
                     
                     # Apply property filters to Weaviate results if provided
                     if property_filters and weaviate_results:
@@ -1204,7 +1333,8 @@ Keep it under 200 words and professional."""
             e.name AS name,
             e.type AS type,
             e.properties AS properties,
-            e.documentId AS document_id
+            e.documentId AS document_id,
+            e.citations AS citations
         LIMIT {limit * 2}
         """
         
@@ -1226,12 +1356,19 @@ Keep it under 200 words and professional."""
                     except:
                         props = {}
                     
+                    citations_raw = record.get("citations")
+                    try:
+                        citations = json.loads(citations_raw) if citations_raw else []
+                    except Exception:
+                        citations = []
+                    
                     entities.append({
                         "id": record.get("id"),
                         "name": record.get("name"),
                         "type": record.get("type"),
                         "properties": props,
-                        "document_id": record.get("document_id")  # Include for citations
+                        "document_id": record.get("document_id"),
+                        "citations": citations
                     })
                 
                 logger.info(f"Neo4j query returned {len(entities)} entities")
@@ -1382,6 +1519,20 @@ Keep it under 200 words and professional."""
             normalized[canonical or key] = value
 
         return normalized
+
+    def _normalize_citations(self, citations: Any) -> List[Dict[str, Any]]:
+        """Ensure citations are always returned as a list of dicts."""
+        if not citations:
+            return []
+        if isinstance(citations, list):
+            return citations
+        if isinstance(citations, str):
+            try:
+                parsed = json.loads(citations)
+                return parsed if isinstance(parsed, list) else []
+            except Exception:
+                return []
+        return []
 
     async def _build_markdown_evidence(self, entities: List[Dict[str, Any]], graph_id: str = None, per_entity: int = 1, max_entities: int = 5) -> List[Dict[str, Any]]:
         """Collect supporting markdown/document snippets for entities."""
