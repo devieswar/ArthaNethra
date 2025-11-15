@@ -3,7 +3,7 @@ Risk model
 """
 from pydantic import BaseModel, Field
 from enum import Enum
-from typing import List
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 from .citation import Citation
 
@@ -37,6 +37,12 @@ class Risk(BaseModel):
     
     # Recommendations
     recommendation: str = Field(..., description="Suggested action or mitigation")
+    
+    # Graph visualization data (entities and relationships relevant to this risk)
+    graph_data: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Graph elements (entities and relationships) relevant to this risk for visualization"
+    )
     
     # Metadata
     document_id: str = Field(..., description="Source document ID")

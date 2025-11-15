@@ -401,4 +401,253 @@ Return as JSON array of risks. If no risks detected, return empty array []."""
             logger.error(f"Error parsing LLM risks: {e}")
         
         return risks
+    
+    async def generate_risk_graph_data(
+        self,
+        risk: Risk,
+        entities: List[Entity],
+        relationships: List[Any]
+    ) -> Dict[str, Any]:
+        """
+        Generate graph data (entities and relationships) relevant to a risk.
+        Uses LLM to identify relevant entities and relationships, with fallback to affected entities.
+        """
+        try:
+            # Limit entities/relationships for LLM context
+            entity_descriptions = []
+            for entity in entities[:100]:
+                entity_dict = {
+                    "id": entity.id,
+                    "name": entity.name,
+                    "type": entity.type.value if hasattr(entity.type, 'value') else str(entity.type),
+                    "display_type": getattr(entity, 'display_type', None),
+                    "properties": entity.properties or {}
+                }
+                entity_descriptions.append(entity_dict)
+            
+            relationship_descriptions = []
+            for edge in relationships[:50]:
+                if hasattr(edge, 'source'):
+                    rel_dict = {
+                        "source_id": edge.source,
+                        "target_id": edge.target,
+                        "type": edge.type.value if hasattr(edge.type, 'value') else str(edge.type),
+                        "properties": edge.properties or {}
+                    }
+                else:
+                    rel_dict = {
+                        "source_id": edge.get("source") or edge.get("source_id"),
+                        "target_id": edge.get("target") or edge.get("target_id"),
+                        "type": edge.get("type") or edge.get("relationship_type"),
+                        "properties": edge.get("properties", {})
+                    }
+                relationship_descriptions.append(rel_dict)
+            
+            # LLM prompt
+            system_prompt = """You are a financial risk analysis expert. Given a specific risk, identify which entities and relationships from the knowledge graph are most relevant to understanding and visualizing this risk.
+
+Your task:
+1. Identify entities that are DIRECTLY affected by the risk (from affected_entity_ids)
+2. Identify entities that are INDIRECTLY related (connected through relationships, contextually relevant)
+3. Identify relationships that help explain how the risk impacts entities or how entities relate to the risk
+4. Focus on entities and relationships that provide context for understanding the risk's scope and impact
+
+Respond with JSON:
+{
+  "relevant_entity_ids": ["entity_id_1", "entity_id_2", ...],
+  "relevant_relationship_indices": [0, 1, 2, ...],
+  "reasoning": "Brief explanation of why these entities/relationships are relevant"
+}
+
+Be comprehensive but focused - include entities that help visualize the risk's impact."""
+
+            user_prompt = f"""Risk Details:
+- Type: {risk.type}
+- Severity: {risk.severity}
+- Description: {risk.description}
+- Affected Entity IDs: {risk.affected_entity_ids}
+- Score: {risk.score}
+- Recommendation: {risk.recommendation}
+
+Available Entities ({len(entity_descriptions)}):
+{json.dumps(entity_descriptions, indent=2)}
+
+Available Relationships ({len(relationship_descriptions)}):
+{json.dumps(relationship_descriptions, indent=2)}
+
+Identify which entity IDs and relationship indices (0-based) are most relevant to understanding this risk. Include:
+1. All affected_entity_ids (they are directly relevant)
+2. Entities connected to affected entities through relationships
+3. Entities mentioned in the risk description or recommendation
+4. Relationships that connect relevant entities
+
+Respond with JSON only."""
+
+            try:
+                response = self.bedrock_client.invoke_model(
+                    modelId=settings.BEDROCK_MODEL_ID,
+                    body=json.dumps({
+                        "anthropic_version": "bedrock-2023-05-31",
+                        "max_tokens": 2048,
+                        "temperature": 0.3,
+                        "system": system_prompt,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": user_prompt
+                            }
+                        ]
+                    })
+                )
+                
+                response_body = json.loads(response['body'].read())
+                content = response_body.get('content', [])
+                
+                llm_response = None
+                for block in content:
+                    if block.get('type') == 'text':
+                        llm_response = block.get('text', '')
+                        break
+                
+                if llm_response:
+                    # Parse LLM response
+                    json_str = llm_response
+                    if "```json" in json_str:
+                        json_str = json_str.split("```json")[1].split("```")[0].strip()
+                    elif "```" in json_str:
+                        json_str = json_str.split("```")[1].split("```")[0].strip()
+                    
+                    llm_result = json.loads(json_str)
+                    relevant_entity_ids = set(llm_result.get("relevant_entity_ids", []))
+                    relevant_entity_ids.update(risk.affected_entity_ids or [])
+                    
+                    # Get relevant entities
+                    relevant_entities = [e for e in entities if e.id in relevant_entity_ids]
+                    
+                    # Get relevant relationships
+                    relevant_rel_indices = set(llm_result.get("relevant_relationship_indices", []))
+                    relevant_relationships = []
+                    seen_edge_ids = set()
+                    
+                    for idx in relevant_rel_indices:
+                        if 0 <= idx < len(relationships):
+                            edge = relationships[idx]
+                            if hasattr(edge, 'id'):
+                                edge_id = edge.id
+                            elif isinstance(edge, dict):
+                                edge_id = edge.get("id", f"{idx}")
+                            else:
+                                edge_id = f"{idx}"
+                            
+                            if edge_id not in seen_edge_ids:
+                                seen_edge_ids.add(edge_id)
+                                if hasattr(edge, 'model_dump'):
+                                    relevant_relationships.append(edge.model_dump())
+                                elif hasattr(edge, 'source'):
+                                    relevant_relationships.append({
+                                        "id": edge.id,
+                                        "source": edge.source,
+                                        "target": edge.target,
+                                        "type": edge.type.value if hasattr(edge.type, 'value') else str(edge.type),
+                                        "properties": edge.properties or {}
+                                    })
+                                else:
+                                    relevant_relationships.append(edge)
+                    
+                    # Also include relationships connecting relevant entities
+                    for edge in relationships:
+                        if hasattr(edge, 'source'):
+                            source = edge.source
+                            target = edge.target
+                            edge_id = edge.id
+                        else:
+                            source = edge.get("source") or edge.get("source_id")
+                            target = edge.get("target") or edge.get("target_id")
+                            edge_id = edge.get("id", "")
+                        
+                        if source in relevant_entity_ids and target in relevant_entity_ids:
+                            if edge_id not in seen_edge_ids:
+                                seen_edge_ids.add(edge_id)
+                                if hasattr(edge, 'model_dump'):
+                                    relevant_relationships.append(edge.model_dump())
+                                elif hasattr(edge, 'source'):
+                                    relevant_relationships.append({
+                                        "id": edge.id,
+                                        "source": edge.source,
+                                        "target": edge.target,
+                                        "type": edge.type.value if hasattr(edge.type, 'value') else str(edge.type),
+                                        "properties": edge.properties or {}
+                                    })
+                                else:
+                                    relevant_relationships.append(edge)
+                    
+                    return {
+                        "entities": [e.model_dump() if hasattr(e, 'model_dump') else {
+                            "id": e.id,
+                            "name": e.name,
+                            "type": e.type.value if hasattr(e.type, 'value') else str(e.type),
+                            "display_type": getattr(e, 'display_type', None),
+                            "properties": e.properties or {}
+                        } for e in relevant_entities],
+                        "relationships": relevant_relationships,
+                        "reasoning": llm_result.get("reasoning", "LLM-generated risk graph")
+                    }
+            except Exception as e:
+                logger.warning(f"LLM graph generation failed for risk {risk.id}: {e}, using fallback")
+            
+            # Fallback: use affected entities and their connections
+            relevant_ids = set(risk.affected_entity_ids or [])
+            relevant_edges = []
+            for idx, edge in enumerate(relationships):
+                if hasattr(edge, 'source'):
+                    source = edge.source
+                    target = edge.target
+                else:
+                    source = edge.get("source") or edge.get("source_id")
+                    target = edge.get("target") or edge.get("target_id")
+                
+                if source in relevant_ids or target in relevant_ids:
+                    relevant_edges.append(idx)
+                    if source:
+                        relevant_ids.add(source)
+                    if target:
+                        relevant_ids.add(target)
+            
+            relevant_entities = [e for e in entities if e.id in relevant_ids]
+            relevant_relationships = []
+            for i in relevant_edges:
+                if i < len(relationships):
+                    edge = relationships[i]
+                    if hasattr(edge, 'model_dump'):
+                        relevant_relationships.append(edge.model_dump())
+                    elif hasattr(edge, 'source'):
+                        relevant_relationships.append({
+                            "id": edge.id,
+                            "source": edge.source,
+                            "target": edge.target,
+                            "type": edge.type.value if hasattr(edge.type, 'value') else str(edge.type),
+                            "properties": edge.properties or {}
+                        })
+                    else:
+                        relevant_relationships.append(edge)
+            
+            return {
+                "entities": [e.model_dump() if hasattr(e, 'model_dump') else {
+                    "id": e.id,
+                    "name": e.name,
+                    "type": e.type.value if hasattr(e.type, 'value') else str(e.type),
+                    "display_type": getattr(e, 'display_type', None),
+                    "properties": e.properties or {}
+                } for e in relevant_entities],
+                "relationships": relevant_relationships,
+                "reasoning": "Fallback: using affected entities and direct connections"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating graph data for risk {risk.id}: {e}")
+            return {
+                "entities": [],
+                "relationships": [],
+                "reasoning": "Error generating graph data"
+            }
 

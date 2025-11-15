@@ -85,7 +85,8 @@ Traditional tools answer: *"What is the debt ratio?"*
 
 - 🕸️ **Graph-First Architecture**: Neo4j + Weaviate dual-database design for entity relationships + semantic search
 - 🔗 **Cross-Document Intelligence**: Automatically connects Invoice → Contract → Vendor → Subsidiary → Parent Company across separate files
-- 📊 **Interactive Visualization**: Sigma.js graph with 4 layout algorithms - drag nodes, explore connections visually
+- 📊 **Interactive Visualization**: Sigma.js graph with 4 layout algorithms - drag nodes, explore connections visually, search and filter
+- ⚠️ **Risk-Specific Graph Visualization**: LLM generates interactive graphs for each detected risk showing affected entities and relationships with layout options, search, and edge tooltips
 - 🤖 **Hybrid Relationship Detection**: LLM-based + heuristic methods to extract complex financial relationships (OWNS, SUBSIDIARY_OF, HAS_LOAN, INVESTED_IN, REGULATED_BY)
 - 💬 **Graph-Augmented Chat**: AI queries both document content AND relationship graph for comprehensive answers
 - 🎨 **Multi-Document Sessions**: Maintain context across 10-Ks, 10-Qs, 8-Ks, contracts, invoices simultaneously in one conversation
@@ -118,8 +119,8 @@ Traditional tools answer: *"What is the debt ratio?"*
 
 ### 2. **Loan Portfolio Risk Management**
 **Problem**: Manually checking if borrowers violate covenants  
-**Solution**: Auto-extract covenants → real-time graph queries  
-**Impact**: Proactive breach detection prevents defaults
+**Solution**: Auto-extract covenants → real-time graph queries → visualize risk relationships  
+**Impact**: Proactive breach detection prevents defaults. Each detected risk includes an interactive graph showing affected entities and their connections, with search and layout options for deeper analysis.
 
 ### 3. **Vendor & Procurement Fraud**
 **Problem**: Duplicate invoices, pricing mismatches  
@@ -231,8 +232,12 @@ ArthaNethra follows a **4-layer architecture**:
 | 🕸️ **Knowledge Graph** | Entities and relationships mapped across documents |
 | 💬 **AI Chatbot** | Natural language Q&A with mandatory document search |
 | 📌 **Clickable Citations** | Every answer links to source PDF page |
-| 📊 **Interactive Graphs** | 4 layout algorithms (force, circular, grid, random) |
-| ⚠️ **Risk Detection** | Hybrid engine (LLM + rules + pattern matching) |
+| 📊 **Interactive Graphs** | 4 layout algorithms (force, circular, grid, random) with search & filtering |
+| ⚠️ **Risk Detection** | Hybrid engine (LLM + rules + pattern matching) with graph visualization |
+| 🔍 **Risk Graph View** | LLM-generated risk-specific graphs with layout options, search, and edge tooltips |
+| 🎯 **Entity Flagging** | Flag entities in list to filter graph view to show only flagged entities and connections |
+| 🗣️ **Speech-to-Text** | Voice input for questions with auto-send |
+| 🔊 **Text-to-Speech** | Read AI responses aloud |
 | 🔍 **Semantic Search** | Weaviate vector search for context retrieval |
 | 🎨 **Session Management** | Named chat sessions with document attachments |
 | 🐳 **One-Command Deploy** | Docker Compose for full stack setup |
@@ -312,11 +317,16 @@ ArthaNethra/
 ### ✅ Implemented Features
 - ✅ Hybrid extraction (ADE + LLM narrative parsing)
 - ✅ Multi-document chat sessions with persistence
-- ✅ Interactive graph visualization (4 layout algorithms)
+- ✅ Interactive graph visualization (4 layout algorithms with search & filtering)
 - ✅ Clickable citations with auto-navigation
-- ✅ AI-generated response graphs
-- ✅ Hybrid risk detection (LLM + rules + patterns)
+- ✅ AI-generated response graphs from chat
+- ✅ Hybrid risk detection (LLM + rules + patterns) with graph visualization
+- ✅ Risk-specific graph view with layout options, search, and edge tooltips
+- ✅ Entity flagging and filtering in graph view
+- ✅ Speech-to-text for voice input with auto-send
+- ✅ Text-to-speech for reading AI responses aloud
 - ✅ Semantic search with Weaviate
+- ✅ Fullscreen graph exploration modes
 - ✅ One-command Docker deployment
 
 ---

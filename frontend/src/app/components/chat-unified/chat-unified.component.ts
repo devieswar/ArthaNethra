@@ -122,6 +122,16 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
   documentRisks: any[] = [];
   riskSummary: any = null;
   riskChartOptions: EChartsOption = {};
+  riskGraphData: Map<string, { entities: any[], edges: any[] }> = new Map(); // Store graph data for each risk
+  selectedRiskForGraph: any = null; // Currently selected risk for graph view
+  isRiskGraphFullscreen = false; // Risk graph fullscreen modal
+  riskSigmaInstance: Sigma | null = null; // Separate Sigma instance for risk graphs
+  riskGraphInstance: Graph | null = null; // Graphology instance for risk graph
+  riskGraphLayout: 'force' | 'circular' | 'grid' | 'random' = 'force'; // Current layout for risk graph
+  riskGraphSearchQuery = ''; // Search query for risk graph
+  riskGraphEntities: any[] = []; // Filtered entities for risk graph
+  riskGraphEdges: any[] = []; // Filtered edges for risk graph
+  riskGraphSearchActive = false; // Whether search is active
   markdownHtml: SafeHtml | null = null;
   isMarkdownFullscreen = false;
   isPdfFullscreen = false;
@@ -1842,6 +1852,7 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
     this.documentRisks = [];
     this.riskSummary = null;
     this.riskChartOptions = {};
+    this.riskGraphData.clear();
     
     try {
       // Load risks for document
@@ -1852,7 +1863,13 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
       this.riskSummary = response.summary || null;
       console.log(`Loaded ${this.documentRisks.length} risks for document ${doc.id}`);
       
-      // Generate risk chart
+      // Load graph data for each risk's affected entities (after risks are loaded)
+      if (doc.graph_id && this.documentRisks.length > 0) {
+        await this.loadRiskGraphData(doc.graph_id);
+      }
+      
+      // Generate risk chart (reset first to avoid ECharts initialization error)
+      this.riskChartOptions = {};
       if (this.riskSummary && (this.riskSummary.total_risks || 0) > 0) {
         this.riskChartOptions = {
           tooltip: {
@@ -1905,6 +1922,555 @@ export class ChatUnifiedComponent implements OnInit, OnDestroy {
       this.documentRisks = [];
       this.riskSummary = null;
     }
+  }
+
+  async loadRiskGraphData(graphId: string): Promise<void> {
+    // Graph data is already persisted with risks - just extract it
+    this.riskGraphData.clear();
+    
+    for (const risk of this.documentRisks) {
+      if (!risk.id) {
+        continue;
+      }
+      
+      // Use persisted graph_data from risk
+      const graphData = risk.graph_data;
+      if (graphData && graphData.entities) {
+        // Deduplicate entities by both ID and name
+        const entityMapById = new Map<string, any>();
+        const seenNames = new Set<string>();
+        
+        (graphData.entities || []).forEach((e: any) => {
+          const id = e.id || e.entityId || e.entity_id;
+          const name = (e.name || '').trim().toLowerCase();
+          
+          if (id && typeof id === 'string' && !entityMapById.has(id)) {
+            // Check for duplicate names
+            if (!name || !seenNames.has(name)) {
+              entityMapById.set(id, e);
+              if (name) {
+                seenNames.add(name);
+              }
+            }
+          }
+        });
+        
+        this.riskGraphData.set(risk.id, {
+          entities: Array.from(entityMapById.values()),
+          edges: graphData.relationships || []
+        });
+      } else {
+        // No graph data available
+        this.riskGraphData.set(risk.id, {
+          entities: [],
+          edges: []
+        });
+      }
+    }
+  }
+
+  getAffectedEntitiesForRisk(risk: any): any[] {
+    const graphData = this.riskGraphData.get(risk.id);
+    if (!graphData || !graphData.entities || graphData.entities.length === 0) {
+      return [];
+    }
+    
+    const affectedIds = new Set<string>(risk.affected_entity_ids || []);
+    const entityMapById = new Map<string, any>();
+    const seenNames = new Set<string>();
+    
+    // First, prioritize entities that are directly affected (from affected_entity_ids)
+    // Then include other entities from the LLM-generated graph
+    const allEntities = graphData.entities;
+    
+    // Sort: affected entities first, then others
+    const sortedEntities = [...allEntities].sort((a, b) => {
+      const aId = a.id || a.entityId || a.entity_id;
+      const bId = b.id || b.entityId || b.entity_id;
+      const aIsAffected = aId && affectedIds.has(aId);
+      const bIsAffected = bId && affectedIds.has(bId);
+      
+      if (aIsAffected && !bIsAffected) return -1;
+      if (!aIsAffected && bIsAffected) return 1;
+      return 0;
+    });
+    
+    // Filter and deduplicate entities by both ID and name
+    sortedEntities.forEach((e: any) => {
+      const id = e.id || e.entityId || e.entity_id;
+      const name = (e.name || '').trim().toLowerCase();
+      
+      if (id && typeof id === 'string') {
+        // Deduplicate by ID
+        if (!entityMapById.has(id)) {
+          // Also check for duplicate names
+          if (!name || !seenNames.has(name)) {
+            entityMapById.set(id, e);
+            if (name) {
+              seenNames.add(name);
+            }
+          }
+        }
+      }
+    });
+    
+    return Array.from(entityMapById.values());
+  }
+
+  hasRiskGraphData(risk: any): boolean {
+    const graphData = this.riskGraphData.get(risk.id);
+    return !!(graphData && graphData.entities && graphData.entities.length > 0);
+  }
+
+  getRiskGraphEntityCount(riskId: string): number {
+    const graphData = this.riskGraphData.get(riskId);
+    return graphData?.entities?.length || 0;
+  }
+
+  getRiskGraphEdgeCount(riskId: string): number {
+    if (this.riskGraphSearchActive && this.riskGraphEdges.length > 0) {
+      return this.riskGraphEdges.length;
+    }
+    const graphData = this.riskGraphData.get(riskId);
+    return graphData?.edges?.length || 0;
+  }
+
+  getRiskGraphEntityCountFiltered(riskId: string): number {
+    if (this.riskGraphSearchActive && this.riskGraphEntities.length > 0) {
+      return this.riskGraphEntities.length;
+    }
+    return this.getRiskGraphEntityCount(riskId);
+  }
+
+  openRiskGraphView(risk: any): void {
+    this.selectedRiskForGraph = risk;
+    this.isRiskGraphFullscreen = true;
+    this.riskGraphSearchQuery = '';
+    this.riskGraphSearchActive = false;
+    
+    // Initialize filtered arrays with all data
+    const graphData = this.riskGraphData.get(risk.id);
+    if (graphData) {
+      this.riskGraphEntities = [...graphData.entities];
+      this.riskGraphEdges = [...graphData.edges];
+    }
+    
+    // Render graph after modal opens
+    setTimeout(() => {
+      this.renderRiskGraph(risk);
+    }, 100);
+  }
+
+  closeRiskGraphView(): void {
+    this.isRiskGraphFullscreen = false;
+    this.selectedRiskForGraph = null;
+    this.riskGraphSearchQuery = '';
+    this.riskGraphSearchActive = false;
+    
+    // Clean up tooltips
+    const nodeTooltip = document.getElementById('risk-node-tooltip');
+    if (nodeTooltip) {
+      nodeTooltip.remove();
+    }
+    const edgeTooltip = document.getElementById('risk-edge-tooltip');
+    if (edgeTooltip) {
+      edgeTooltip.remove();
+    }
+    
+    // Clean up risk graph instance
+    if (this.riskSigmaInstance) {
+      try {
+        this.riskSigmaInstance.kill();
+        this.riskSigmaInstance = null;
+      } catch (e) {
+        // Ignore
+      }
+    }
+    
+    // Clean up graph instance
+    this.riskGraphInstance = null;
+  }
+
+  applyRiskGraphSearch(): void {
+    if (!this.selectedRiskForGraph) return;
+    
+    const query = this.riskGraphSearchQuery.trim().toLowerCase();
+    this.riskGraphSearchActive = query.length > 0;
+    
+    if (!this.riskGraphSearchActive) {
+      // Reset to all entities/edges
+      const graphData = this.riskGraphData.get(this.selectedRiskForGraph.id);
+      if (graphData) {
+        this.riskGraphEntities = [...graphData.entities];
+        this.riskGraphEdges = [...graphData.edges];
+      }
+      this.renderRiskGraph(this.selectedRiskForGraph);
+      return;
+    }
+    
+    // Filter entities
+    const graphData = this.riskGraphData.get(this.selectedRiskForGraph.id);
+    if (!graphData) return;
+    
+    const matchingEntities = graphData.entities.filter((e: any) => {
+      const name = (e.name || '').toLowerCase();
+      const type = (e.type || '').toLowerCase();
+      const displayType = (e.display_type || '').toLowerCase();
+      return name.includes(query) || type.includes(query) || displayType.includes(query);
+    });
+    
+    const matchingEntityIds = new Set(matchingEntities.map((e: any) => e.id || e.entityId || e.entity_id));
+    
+    // Filter edges to show only those connecting matching entities
+    const matchingEdges = graphData.edges.filter((edge: any) => {
+      const { source, target } = this.getEdgeEndpoints(edge);
+      return matchingEntityIds.has(source) && matchingEntityIds.has(target);
+    });
+    
+    this.riskGraphEntities = matchingEntities;
+    this.riskGraphEdges = matchingEdges;
+    
+    // Re-render with filtered data
+    this.renderRiskGraph(this.selectedRiskForGraph);
+  }
+
+  clearRiskGraphSearch(): void {
+    this.riskGraphSearchQuery = '';
+    this.riskGraphSearchActive = false;
+    this.applyRiskGraphSearch();
+  }
+
+  changeRiskGraphLayout(layout: 'force' | 'circular' | 'grid' | 'random'): void {
+    this.riskGraphLayout = layout;
+    if (this.riskGraphInstance && this.riskSigmaInstance) {
+      this.applyLayout(this.riskGraphInstance, layout);
+      this.riskSigmaInstance.refresh();
+    }
+  }
+
+  renderRiskGraph(risk: any): void {
+    const graphData = this.riskGraphData.get(risk.id);
+    if (!graphData || graphData.entities.length === 0) {
+      console.warn('No graph data for risk:', risk.id);
+      return;
+    }
+    
+    const containerId = 'riskGraphContainer';
+    const container = document.getElementById(containerId);
+    if (!container) {
+      console.error('Risk graph container not found');
+      return;
+    }
+    
+    // Clear existing risk graph
+    if (this.riskSigmaInstance) {
+      try {
+        this.riskSigmaInstance.kill();
+        this.riskSigmaInstance = null;
+      } catch (e) {
+        // Ignore
+      }
+    }
+    
+    // Clear graph instance
+    this.riskGraphInstance = null;
+    
+    // Use filtered entities/edges if search is active, otherwise use all
+    const entitiesToRender = this.riskGraphSearchActive && this.riskGraphEntities.length > 0
+      ? this.riskGraphEntities
+      : graphData.entities;
+    const edgesToRender = this.riskGraphSearchActive && this.riskGraphEdges.length > 0
+      ? this.riskGraphEdges
+      : graphData.edges;
+    
+    // Create new graphology instance
+    this.riskGraphInstance = new Graph();
+    const graph = this.riskGraphInstance as any;
+    
+    // Map to store edge data for tooltips
+    const edgeDataByKey = new Map<string, any>();
+    
+    // Add nodes (entities)
+    entitiesToRender.forEach((entity: any) => {
+      const id = entity.id || entity.entityId || entity.entity_id;
+      if (!id || typeof id !== 'string') return;
+      
+      const isAffected = (risk.affected_entity_ids || []).includes(id);
+      const displayType = this.getEntityDisplayType(entity);
+      const type = entity.type || entity.entityType || 'Entity';
+      const typeColors: { [key: string]: string } = {
+        'Company': '#3b82f6',
+        'Person': '#8b5cf6',
+        'Location': '#10b981',
+        'Metric': '#f59e0b',
+        'Clause': '#ef4444',
+        'Instrument': '#ec4899',
+        'Entity': '#94a3b8'
+      };
+      
+      // Build description for tooltip
+      const props = entity.properties || {};
+      const propEntries = Object.entries(props).slice(0, 5);
+      const propText = propEntries.map(([k, v]) => `${k}: ${v}`).join('\n');
+      const description = `${displayType}\n${propText ? propText : 'No additional properties'}`;
+      
+      graph.addNode(id, {
+        label: entity.name || id,
+        size: isAffected ? 12 : 8,
+        color: isAffected ? '#ef4444' : (typeColors[type] || '#94a3b8'),
+        description: description,
+        x: Math.random() * 100,
+        y: Math.random() * 100
+      });
+    });
+    
+    // Add edges (relationships)
+    edgesToRender.forEach((edge: any) => {
+      const { source, target } = this.getEdgeEndpoints(edge);
+      if (!source || !target || typeof source !== 'string' || typeof target !== 'string') {
+        return;
+      }
+      if (!graph.hasNode(source) || !graph.hasNode(target)) {
+        return;
+      }
+      
+      // Check if edge already exists (both directions for undirected)
+      const edgeExists = graph.hasEdge(source, target) || graph.hasEdge(target, source);
+      if (!edgeExists) {
+        const edgeKey = graph.addEdge(source, target, {
+          label: edge.type || edge.relationship_type || 'RELATED_TO',
+          size: 2,
+          color: '#94a3b8'
+        });
+        // Store edge data for tooltips
+        edgeDataByKey.set(edgeKey, {
+          relationship_type: edge.type || edge.relationship_type || 'RELATED_TO',
+          properties: edge.properties || {},
+          reasoning: edge.reasoning || edge.explanation,
+          confidence: edge.confidence,
+          detected_by: edge.detected_by || edge.source
+        });
+      }
+    });
+    
+    // Apply layout based on current layout setting
+    random.assign(graph, { scale: 100 }); // Start with random positions
+    this.applyLayout(graph, this.riskGraphLayout);
+    
+    // Create Sigma instance for risk graph
+    this.riskSigmaInstance = new Sigma(graph, container, {
+      renderLabels: true,
+      labelSize: 10,
+      labelWeight: 'normal',
+      labelColor: { attribute: 'color' },
+      defaultNodeColor: '#10b981',
+      defaultEdgeColor: '#94a3b8',
+      minCameraRatio: 0.1,
+      maxCameraRatio: 10
+    });
+    
+    // Enable node dragging with tooltips (same as main graph)
+    let draggedNode: string | null = null;
+    let isDragging = false;
+    
+    this.riskSigmaInstance.on('downNode', (e: any) => {
+      isDragging = true;
+      draggedNode = e.node;
+      (this.riskGraphInstance as any).setNodeAttribute(draggedNode, 'highlighted', true);
+      container.style.cursor = 'grabbing';
+
+      const attrs = (this.riskGraphInstance as any).getNodeAttributes(draggedNode);
+      const description = attrs?.description;
+      if (description) {
+        let tooltip = document.getElementById('risk-node-tooltip');
+        if (!tooltip) {
+          tooltip = document.createElement('div');
+          tooltip.id = 'risk-node-tooltip';
+          tooltip.style.position = 'fixed';
+          tooltip.style.backgroundColor = 'rgba(31,41,55,0.95)';
+          tooltip.style.color = 'white';
+          tooltip.style.padding = '8px 12px';
+          tooltip.style.borderRadius = '6px';
+          tooltip.style.fontSize = '12px';
+          tooltip.style.maxWidth = '260px';
+          tooltip.style.pointerEvents = 'none';
+          tooltip.style.zIndex = '10000';
+          tooltip.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
+          document.body.appendChild(tooltip);
+        }
+        tooltip.innerHTML = `
+          <div style="font-weight:600;margin-bottom:4px">${attrs?.label || 'Entity'}</div>
+          <div style="white-space:pre-wrap;color:#d1d5db;font-size:11px">${description}</div>
+        `;
+        tooltip.style.display = 'block';
+        const updateTooltipPosition = (evt: MouseEvent) => {
+          if (tooltip) {
+            tooltip.style.left = (evt.clientX + 15) + 'px';
+            tooltip.style.top = (evt.clientY + 15) + 'px';
+          }
+        };
+        container.addEventListener('mousemove', updateTooltipPosition);
+        (tooltip as any)._removeListener = () => {
+          container.removeEventListener('mousemove', updateTooltipPosition);
+        };
+      }
+    });
+    
+    this.riskSigmaInstance.on('enterNode', (event: any) => {
+      if (!isDragging) {
+        container.style.cursor = 'grab';
+      }
+      const nodeId = event.node;
+      const attrs = (this.riskGraphInstance as any).getNodeAttributes(nodeId);
+      const description = attrs?.description;
+      if (description && !isDragging) {
+        let tooltip = document.getElementById('risk-node-tooltip');
+        if (!tooltip) {
+          tooltip = document.createElement('div');
+          tooltip.id = 'risk-node-tooltip';
+          tooltip.style.position = 'fixed';
+          tooltip.style.backgroundColor = 'rgba(31,41,55,0.95)';
+          tooltip.style.color = 'white';
+          tooltip.style.padding = '8px 12px';
+          tooltip.style.borderRadius = '6px';
+          tooltip.style.fontSize = '12px';
+          tooltip.style.maxWidth = '260px';
+          tooltip.style.pointerEvents = 'none';
+          tooltip.style.zIndex = '10000';
+          tooltip.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
+          document.body.appendChild(tooltip);
+        }
+        tooltip.innerHTML = `
+          <div style="font-weight:600;margin-bottom:4px">${attrs?.label || 'Entity'}</div>
+          <div style="white-space:pre-wrap;color:#d1d5db;font-size:11px">${description}</div>
+        `;
+        tooltip.style.display = 'block';
+        const updateTooltipPosition = (evt: MouseEvent) => {
+          if (tooltip) {
+            tooltip.style.left = (evt.clientX + 15) + 'px';
+            tooltip.style.top = (evt.clientY + 15) + 'px';
+          }
+        };
+        container.addEventListener('mousemove', updateTooltipPosition);
+        (tooltip as any)._removeListener = () => {
+          container.removeEventListener('mousemove', updateTooltipPosition);
+        };
+      }
+    });
+    
+    this.riskSigmaInstance.on('leaveNode', () => {
+      if (!isDragging) {
+        container.style.cursor = 'default';
+      }
+      const tooltip = document.getElementById('risk-node-tooltip');
+      if (tooltip) {
+        tooltip.style.display = 'none';
+        if ((tooltip as any)._removeListener) {
+          (tooltip as any)._removeListener();
+        }
+      }
+    });
+    
+    this.riskSigmaInstance.getMouseCaptor().on('mousemovebody', (e: any) => {
+      if (!isDragging || !draggedNode || !this.riskSigmaInstance || !this.riskGraphInstance) return;
+      
+      // Get new position from mouse
+      const pos = this.riskSigmaInstance.viewportToGraph(e);
+      
+      // Update node position
+      (this.riskGraphInstance as any).setNodeAttribute(draggedNode, 'x', pos.x);
+      (this.riskGraphInstance as any).setNodeAttribute(draggedNode, 'y', pos.y);
+      
+      // Prevent camera movement while dragging
+      e.preventSigmaDefault();
+      e.original.preventDefault();
+      e.original.stopPropagation();
+    });
+    
+    this.riskSigmaInstance.getMouseCaptor().on('mouseup', () => {
+      if (draggedNode && this.riskGraphInstance) {
+        (this.riskGraphInstance as any).removeNodeAttribute(draggedNode, 'highlighted');
+        draggedNode = null;
+      }
+      isDragging = false;
+      if (container) {
+        container.style.cursor = 'default';
+      }
+      const tooltip = document.getElementById('risk-node-tooltip');
+      if (tooltip) {
+        tooltip.style.display = 'none';
+        if ((tooltip as any)._removeListener) {
+          (tooltip as any)._removeListener();
+        }
+      }
+    });
+    
+    // Edge hover - show relationship details in tooltip
+    this.riskSigmaInstance.on('enterEdge', (event: any) => {
+      const edgeKey = event.edge;
+      const edgeData = edgeDataByKey.get(edgeKey);
+      if (!edgeData) {
+        return;
+      }
+      
+      const props = edgeData.properties || {};
+      const reasoning = props['reasoning'] || props['explanation'] || edgeData.reasoning || edgeData.explanation || 'No reasoning provided';
+      const impact = props['impact'] || props['effect'];
+      const confidenceValue = props['confidence'] ?? edgeData.confidence;
+      const confidence = typeof confidenceValue === 'number'
+        ? ` (confidence: ${(confidenceValue * 100).toFixed(0)}%)`
+        : (confidenceValue ? ` (confidence: ${confidenceValue})` : '');
+      const detectedBy = props['detected_by'] || props['source'] || edgeData.detected_by || 'unknown';
+      const citations = Array.isArray(props['citations']) ? props['citations'] : [];
+      
+      let tooltip = document.getElementById('risk-edge-tooltip');
+      if (!tooltip) {
+        tooltip = document.createElement('div');
+        tooltip.id = 'risk-edge-tooltip';
+        tooltip.style.position = 'fixed';
+        tooltip.style.backgroundColor = 'rgba(31, 41, 55, 0.95)';
+        tooltip.style.color = 'white';
+        tooltip.style.padding = '8px 12px';
+        tooltip.style.borderRadius = '6px';
+        tooltip.style.fontSize = '12px';
+        tooltip.style.maxWidth = '320px';
+        tooltip.style.zIndex = '10000';
+        tooltip.style.pointerEvents = 'none';
+        tooltip.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1)';
+        document.body.appendChild(tooltip);
+      }
+      
+      tooltip.innerHTML = `
+        <div style="margin-bottom: 4px"><strong>${edgeData.relationship_type || 'RELATIONSHIP'}</strong></div>
+        <div style="color: #d1d5db; font-size: 11px">${reasoning}${confidence}</div>
+        ${impact ? `<div style="color:#fbbf24;font-size:11px;margin-top:4px">Impact: ${impact}</div>` : ''}
+        <div style="color: #9ca3af; font-size: 10px; margin-top: 4px">Detected by: ${detectedBy}</div>
+        ${citations.length > 0 ? `<div style="color:#9ca3af;font-size:10px;margin-top:4px">Citation: ${citations[0]}</div>` : ''}
+      `;
+      tooltip.style.display = 'block';
+      
+      const updateTooltipPosition = (evt: MouseEvent) => {
+        if (tooltip) {
+          tooltip.style.left = (evt.clientX + 15) + 'px';
+          tooltip.style.top = (evt.clientY + 15) + 'px';
+        }
+      };
+      
+      container.addEventListener('mousemove', updateTooltipPosition);
+      (tooltip as any)._removeListener = () => {
+        container.removeEventListener('mousemove', updateTooltipPosition);
+      };
+    });
+    
+    this.riskSigmaInstance.on('leaveEdge', () => {
+      const tooltip = document.getElementById('risk-edge-tooltip');
+      if (tooltip) {
+        tooltip.style.display = 'none';
+        if ((tooltip as any)._removeListener) {
+          (tooltip as any)._removeListener();
+        }
+      }
+    });
   }
 
   async viewDocumentPDF(doc: Document, page?: number, citedPages?: number[]) {

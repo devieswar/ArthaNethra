@@ -410,6 +410,7 @@ class PersistenceService:
                             threshold=risk_data.get("threshold", 0.0),
                             actual_value=risk_data.get("actual_value", 0.0),
                             recommendation=risk_data.get("recommendation", "Review this risk"),
+                            graph_data=risk_data.get("graph_data"),  # Include graph_data
                             document_id=risk_data.get("document_id", ""),
                             graph_id=risk_data.get("graph_id", graph_id)
                         )
